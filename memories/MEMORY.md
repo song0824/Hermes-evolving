@@ -18,15 +18,17 @@
 §
 test群 oc_8b8978c0510660ec4da3c52ebc7bb9a3。多个bot：hermes(ou_41e5c8ebbe0ea74578cb06ba106db7b3)、人机openclaw(ou_129dd5839056b1b78729efe53e91a764)。@没反应先确认@的是哪个。
 §
-**飞书 API**：App ID: `cli_a97b1e4633f99cb0`, Secret: `3VO3tDBRDAo7pTCgGZViXg7gOo3OBlij`。Bitable 有 Create/Write。云文档/wiki 仅 readonly。新文件给群/用户开 full_access。加急用 `/urgent_app` 端点。
+**飞书 API**：App ID: `cli_a97b1e4633f99cb0`。Bitable Create/Write。云文档/wiki 仅 readonly。新文件给群/用户开 full_access。
 §
-生图工具：DashScope 万相 wan2.6-t2i（北京节点）。API Key 见 `.hermes/.env` OPENAI_API_KEY。Workspace ID: `llm-2mnugdosx628stt0`。端点：`POST https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation`。新加坡节点需单独申请 Key。Skill: `alibaba-dashscope-image-gen`。Gemini Imagen 4.0 保留备用。
+生图：DashScope wan2.6-t2i（北京）。Key 见 `.hermes/.env`。Workspace: `llm-2mnugdosx628stt0`。Gemini 备用。
 §
-**技术周会自动化**：脚本 `~/.hermes/scripts/weekly_tech_meeting.py`，cron `468a36759729`（周五 9:00）。模板 `KtOLd1e7CoSXkNxgF7jcDiI7nrd`，wiki space `7612892588537892047`，通知群 `oc_611b7861968a34f8c2f538f67410b629`。流程：wiki节点→写blocks（mention_user需清理）。给愚者开 full_access。
+**技术周会**：脚本 `~/.hermes/scripts/weekly_tech_meeting.py`，cron `468a36759729`（周五 9:00）。模板 `KtOLd1e7CoSXkNxgF7jcDiI7nrd`，wiki space `7612892588537892047`，通知群 `oc_611b7861968a34f8c2f538f67410b629`。⚠️ wiki API 忽略 obj_token，正确流程：先创建 wiki 节点（不传 obj_token）→ 获取自动生成的 obj_token → 写 blocks。给大卫（ou_dfc3579b6b0ced44f7745f24ace77b73）开 full_access。
 §
-研发团队组织架构（R&D）：leader愚者、架构师大卫、安卓(梧桐/天璇/洛基/白羊/猎户)、JAVA黑洞、运维天行者、后端(海晨/周行/六芒星/螺旋)、AIGC云天明、AI南斗/星轨、Flutter(辰星/启元)、服务端九九、测试(闪电/大羊星/白洞/彗星/开拓者)。待招：golang后端、AI算法、算法实习生、外包测试、Linux工程师。团队使用代号/昵称文化。
+研发团队组织架构（R&D）：愚者已离职，账号已停用，不再授权、不加急、不 @。架构师大卫、安卓(梧桐/天璇/洛基/白羊/猎户)、JAVA黑洞、运维天行者、后端(海晨/周行/六芒星/螺旋)、AIGC云天明、AI南斗/星轨、Flutter(辰星/启元)、服务端九九、测试(闪电/大羊星/白洞/彗星/开拓者)。待招：golang后端、AI算法、算法实习生、外包测试、Linux工程师。团队使用代号/昵称文化。
 §
 **项目多维表格数据源**：
 - 国内OTA：wiki `BqLuwv4fNiAUERkLG2Yc6YO0nxd`，bitable `JmEHb9orfaOmYssOwETcNncYnWd`，table `tbl9c4NAOuRuIPpt`
 - 海外Luka：wiki `WJ2Pw3xMGiRq8Sk4nDqccXXJn7b`，bitable `JceAbET1Jax8TtstyNUcbRBunxd`，table `tblOiYO57m0h8zk2`
-**需求文档分析偏好**：按人员聚合，显示父节点上下文（【父】→子需求），含起止时间/周期，仅统计未完成（排除Completed），按未完成数降序+负载等级，重新生成时创建新文档，给愚者（ou_b1ae70c2ac573b88db4656fcd79482e2）开 full_access
+**需求文档分析偏好**：按人员聚合，显示父节点上下文（【父】→子需求），含起止时间/周期，仅统计未完成（排除Completed），按未完成数降序+负载等级，重新生成时创建新文档，给大卫（ou_dfc3579b6b0ced44f7745f24ace77b73）开 full_access
+§
+**Git 远程**：`origin` → GitLab `gitlab.ling.ai:10080/songzihang/Hermes-evolving.git`；`github` → GitHub `github.com/song0824/Hermes-evolving.git`。

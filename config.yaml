@@ -480,7 +480,7 @@ platforms:
       dm_policy: open
       default_group_policy: open
       group_policy: open
-      app_id: ${FEISHU_APP_ID}
+      app_id: cli_a97b1e4633f99cb0
       app_secret: ${FEISHU_APP_SECRET}
       bot_open_id: ou_41e5c8ebbe0ea74578cb06ba106db7b3
   api_server:

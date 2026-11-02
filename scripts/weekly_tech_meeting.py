@@ -9,13 +9,15 @@ import json
 import yaml
 import os
 import time
+import re
 from datetime import datetime
 
 CONFIG_PATH = os.path.expanduser("~/.hermes/config.yaml")
 TEMPLATE_DOC = "KtOLd1e7CoSXkNxgF7jcDiI7nrd"
 WIKI_SPACE_ID = "7612892588537892047"
-NOTIFY_GROUP = "oc_611b7861968a34f8c2f538f67410b629"
-TARGET_USER = "ou_b1ae70c2ac573b88db4656fcd79482e2"  # 愚者
+RD_GROUP = "oc_611b7861968a34f8c2f538f67410b629"  # 研发运维群（实时查询成员）
+NOTIFY_GROUP = "oc_8b8978c0510660ec4da3c52ebc7bb9a3"  # 通知群（test测试群）
+TARGET_USER = "ou_dfc3579b6b0ced44f7745f24ace77b73"  # 大卫（加急通知）
 
 
 def get_token():
@@ -57,10 +59,69 @@ def feishu_get(token, path):
     return json.loads(raw)
 
 
-def clean_block(block):
-    """清理 block，移除 block_id、parent_id，替换 mention_user 为 text_run"""
+def get_group_members(token, chat_id):
+    """实时查询群成员，返回 {member_id: name} 映射"""
+    members = {}
+    page = ""
+    while True:
+        url = f"/open-apis/im/v1/chats/{chat_id}/members?page_size=100"
+        if page:
+            url += f"&page_token={page}"
+        resp = feishu_get(token, url)
+        for m in resp.get("data", {}).get("items", []):
+            members[m.get("member_id", "")] = m.get("name", "")
+        if not resp.get("data", {}).get("has_more"):
+            break
+        page = resp.get("data", {}).get("page_token", "")
+    return members
+
+
+def get_mention_name_map(token):
+    """从模板文档获取 mention_user user_id -> 显示名 的映射"""
+    raw_url = f"/open-apis/docx/v1/documents/{TEMPLATE_DOC}/raw_content?document_id={TEMPLATE_DOC}"
+    resp = feishu_get(token, raw_url)
+    raw_content = resp.get("data", {}).get("content", "")
+    names = re.findall(r'@([^\s\n]+)', raw_content)
+
+    blocks = []
+    page = ""
+    while True:
+        path = f"/open-apis/docx/v1/documents/{TEMPLATE_DOC}/blocks/{TEMPLATE_DOC}/children?page_size=50"
+        if page:
+            path += f"&page_token={page}"
+        resp = feishu_get(token, path)
+        items = resp.get("data", {}).get("items", [])
+        blocks.extend(items)
+        if not resp["data"].get("has_more"):
+            break
+        page = resp["data"]["page_token"]
+
+    uids = []
+    for b in blocks:
+        for field in ("heading1", "heading2", "heading3", "text", "bullet", "ordered"):
+            if field in b:
+                for el in b[field].get("elements", []):
+                    if "mention_user" in el:
+                        uids.append(el["mention_user"].get("user_id", ""))
+
+    return dict(zip(uids, names))
+
+
+def clean_block(block, name_map, group_members):
+    """清理 block，移除 block_id、parent_id，替换 mention_user 为 text_run。
+    如果用户不在研发运维群中，跳过整个 block（heading3 + 后续空行）。
+    """
+    bt = block.get("block_type", 0)
+    # heading3 包含 mention_user：检查用户是否在群中
+    if bt == 5:  # heading3
+        elements = block.get("heading3", {}).get("elements", [])
+        for el in elements:
+            if "mention_user" in el:
+                uid = el["mention_user"].get("user_id", "")
+                if uid not in group_members:
+                    return None  # 跳过不在群中的用户
+
     clean = {k: v for k, v in block.items() if k not in ("block_id", "parent_id")}
-    # 处理 mention_user → text_run
     for key in ("heading1", "heading2", "heading3", "text"):
         if key in clean:
             elements = clean[key].get("elements", [])
@@ -69,10 +130,12 @@ def clean_block(block):
                 if "mention_user" in elem:
                     mention = elem["mention_user"]
                     style = mention.get("text_element_style", {})
+                    uid = mention.get("user_id", "")
+                    display_name = name_map.get(uid, "用户") if name_map else "用户"
                     new_elements.append(
                         {
                             "text_run": {
-                                "content": "@用户",
+                                "content": f"@{display_name}",
                                 "text_element_style": style,
                             }
                         }
@@ -99,13 +162,6 @@ def get_template_blocks(token):
     return all_blocks
 
 
-def create_doc(token, title):
-    resp = feishu_post(token, "/open-apis/docx/v1/documents", {"folder_token": ""})
-    if resp.get("code") != 0:
-        raise Exception(f"Create doc failed: {resp}")
-    return resp["data"]["document"]["document_id"]
-
-
 def write_blocks(token, doc_id, blocks):
     url = f"/open-apis/docx/v1/documents/{doc_id}/blocks/{doc_id}/children"
     batch_size = 30
@@ -119,7 +175,7 @@ def write_blocks(token, doc_id, blocks):
         time.sleep(0.5)
 
 
-def create_wiki_node(token, space_id, title, obj_token):
+def create_wiki_node(token, space_id, title):
     resp = feishu_post(
         token,
         f"/open-apis/wiki/v2/spaces/{space_id}/nodes",
@@ -134,16 +190,16 @@ def create_wiki_node(token, space_id, title, obj_token):
     return resp["data"]["node"]
 
 
-def grant_permission(token, doc_id, user_open_id):
-    """Grant full_access to user on the doc"""
+def grant_group_permission(token, doc_id, chat_id):
+    """给群开文档编辑权限"""
     resp = feishu_post(
         token,
         f"/open-apis/drive/v1/permissions/{doc_id}/members/batch_create?type=docx",
         {
             "members": [
                 {
-                    "member_type": "openid",
-                    "member_id": user_open_id,
+                    "member_type": "openchat",
+                    "member_id": chat_id,
                     "perm": "full_access",
                 }
             ]
@@ -170,41 +226,72 @@ def main():
     week_str = datetime.now().strftime("%Y-%m-%d")
     title = f"技术周会 {week_str}"
 
-    print(f"[1/6] Creating document...")
-    doc_id = create_doc(token, title)
-    print(f"  Doc ID: {doc_id}")
+    print(f"[1/7] Building mention name map...")
+    name_map = get_mention_name_map(token)
+    print(f"  Mapped {len(name_map)} users from template")
 
-    print(f"[2/6] Fetching template blocks...")
+    print(f"[2/7] Fetching R&D group members (real-time)...")
+    group_members = get_group_members(token, RD_GROUP)
+    print(f"  Group has {len(group_members)} members")
+    in_group = {uid: name for uid, name in name_map.items() if uid in group_members}
+    not_in_group = {uid: name for uid, name in name_map.items() if uid not in group_members}
+    print(f"  In group: {len(in_group)}, Not in group: {len(not_in_group)}")
+    if not_in_group:
+        print(f"  Skipped: {', '.join(not_in_group.values())}")
+
+    print(f"[3/7] Creating wiki node...")
+    node = create_wiki_node(token, WIKI_SPACE_ID, title)
+    doc_id = node["obj_token"]
+    wiki_url = node.get("url", "")
+    print(f"  Doc ID: {doc_id}")
+    print(f"  Wiki URL: {wiki_url}")
+
+    print(f"[4/7] Fetching template blocks...")
     raw_blocks = get_template_blocks(token)
     print(f"  Got {len(raw_blocks)} blocks")
 
-    print(f"[3/6] Cleaning and writing blocks...")
-    clean_blocks = [clean_block(b) for b in raw_blocks]
+    print(f"[5/7] Cleaning (filter group members) and writing blocks...")
+    clean_blocks = [cb for b in raw_blocks if (cb := clean_block(b, name_map, group_members)) is not None]
     write_blocks(token, doc_id, clean_blocks)
-    print(f"  Wrote {len(clean_blocks)} blocks")
+    print(f"  Wrote {len(clean_blocks)} blocks (filtered {len(raw_blocks) - len(clean_blocks)})")
 
-    print(f"[4/6] Creating wiki node...")
-    node = create_wiki_node(token, WIKI_SPACE_ID, title, doc_id)
-    wiki_url = node.get("url", "")
-    print(f"  Wiki URL: {wiki_url}")
+    print(f"[6/7] Granting edit permission to R&D group...")
+    perm_resp = grant_group_permission(token, doc_id, RD_GROUP)
+    print(f"  Permission result: {perm_resp.get('code')} {perm_resp.get('msg')}")
 
-    print(f"[5/6] Granting permission to 愚者...")
-    perm_resp = grant_permission(token, doc_id, TARGET_USER)
-    print(f"  Permission result: {perm_resp.get('code')}")
+    print(f"[7/7] Sending notification to group...")
+    # Build @ list for in-group users using post message type
+    at_elements = []
+    for uid, name in in_group.items():
+        at_elements.append({"tag": "at", "user_id": uid, "text": f"@{name}"})
+    at_elements.append({"tag": "text", "text": "\n请各负责人填写本周进展。"})
 
-    print(f"[6/6] Sending notification to group...")
-    msg = f"📋 技术周会文档已创建\n\n📅 {week_str}\n🔗 {wiki_url}\n\n请各负责人填写本周进展。"
-    msg_resp = send_group_message(token, NOTIFY_GROUP, msg)
+    content = [
+        [{"tag": "text", "text": f"📋 技术周会文档已创建"}],
+        [{"tag": "text", "text": f"📅 {week_str}"}],
+        [{"tag": "a", "text": f"🔗 {wiki_url}", "href": wiki_url}],
+        [{"tag": "text", "text": ""}],  # 空行
+        at_elements
+    ]
+
+    msg_resp = feishu_post(
+        token,
+        "/open-apis/im/v1/messages?receive_id_type=chat_id",
+        {
+            "receive_id": NOTIFY_GROUP,
+            "msg_type": "post",
+            "content": json.dumps({"zh_cn": {"title": "技术周会文档已创建", "content": content}}),
+        },
+    )
     if msg_resp.get("code") == 0:
         msg_id = msg_resp["data"]["message_id"]
-        # Add urgent notification
         feishu_post(
             token,
             f"/open-apis/im/v1/messages/{msg_id}/urgent_app?user_id_type=open_id",
             {"user_id_list": [TARGET_USER]},
             method="PATCH",
         )
-        print(f"  Message sent + urgent to 愚者")
+        print(f"  Message sent with @mentions + urgent to 大卫")
     else:
         print(f"  Message send failed: {msg_resp}")
 
