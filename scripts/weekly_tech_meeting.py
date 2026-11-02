@@ -3,21 +3,26 @@
 技术周会文档自动复制脚本
 每周五 9:00 运行，从模板复制文档到 wiki 空间并通知群
 """
+import copy
 import urllib.request
 import http.client
 import json
 import yaml
 import os
 import time
-import re
 from datetime import datetime
 
 CONFIG_PATH = os.path.expanduser("~/.hermes/config.yaml")
 TEMPLATE_DOC = "KtOLd1e7CoSXkNxgF7jcDiI7nrd"
 WIKI_SPACE_ID = "7612892588537892047"
+WIKI_PARENT_NODE = "AAGlw95lZi4sUqk78vzc7mkHnIb"  # 技术周会知识库父节点
 RD_GROUP = "oc_611b7861968a34f8c2f538f67410b629"  # 研发运维群（实时查询成员）
 NOTIFY_GROUP = "oc_8b8978c0510660ec4da3c52ebc7bb9a3"  # 通知群（test测试群）
 TARGET_USER = "ou_dfc3579b6b0ced44f7745f24ace77b73"  # 大卫（加急通知）
+WIKI_BASE = "https://ta1mz8n1mps.feishu.cn/wiki"
+CONTENT_FIELDS = ("heading1", "heading2", "heading3", "text", "bullet", "ordered")
+# block_type 3–11 是各级标题。跳过不在群里的人时，连同其小节正文一起丢掉，直到下一个标题。
+HEADING_BLOCK_TYPES = range(3, 12)
 
 
 def get_token():
@@ -31,148 +36,249 @@ def get_token():
         json.dumps({"app_id": app_id, "app_secret": app_secret}).encode(),
         headers={"Content-Type": "application/json"},
     )
-    return json.loads(urllib.request.urlopen(req).read())["tenant_access_token"]
+    resp = json.loads(urllib.request.urlopen(req, timeout=30).read())
+    if resp.get("code") != 0 or not resp.get("tenant_access_token"):
+        raise Exception(f"Get tenant_access_token failed: {resp}")
+    return resp["tenant_access_token"]
+
+
+def feishu_request(token, method, path, body_dict=None):
+    headers = {"Authorization": f"Bearer {token}"}
+    body = None
+    if body_dict is not None:
+        body = json.dumps(body_dict, ensure_ascii=False).encode("utf-8")
+        headers["Content-Type"] = "application/json; charset=utf-8"
+    conn = http.client.HTTPSConnection("open.feishu.cn", timeout=30)
+    try:
+        conn.request(method, path, body, headers=headers)
+        raw = conn.getresponse().read().decode("utf-8")
+    finally:
+        conn.close()
+    return json.loads(raw)
 
 
 def feishu_post(token, path, body_dict, method="POST"):
-    body = json.dumps(body_dict, ensure_ascii=False).encode("utf-8")
-    conn = http.client.HTTPSConnection("open.feishu.cn")
-    conn.request(
-        method,
-        path,
-        body,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json; charset=utf-8",
-        },
-    )
-    raw = conn.getresponse().read().decode()
-    conn.close()
-    return json.loads(raw)
+    return feishu_request(token, method, path, body_dict)
 
 
 def feishu_get(token, path):
-    conn = http.client.HTTPSConnection("open.feishu.cn")
-    conn.request("GET", path, headers={"Authorization": f"Bearer {token}"})
-    raw = conn.getresponse().read().decode()
-    conn.close()
-    return json.loads(raw)
+    return feishu_request(token, "GET", path)
 
 
 def get_group_members(token, chat_id):
-    """实时查询群成员，返回 {member_id: name} 映射"""
+    """实时查询群成员，返回 {member_id: name}。失败或空名单时中止，避免写成一份没有人的周报。"""
     members = {}
     page = ""
     while True:
-        url = f"/open-apis/im/v1/chats/{chat_id}/members?page_size=100"
+        url = f"/open-apis/im/v1/chats/{chat_id}/members?member_id_type=open_id&page_size=100"
         if page:
             url += f"&page_token={page}"
         resp = feishu_get(token, url)
-        for m in resp.get("data", {}).get("items", []):
-            members[m.get("member_id", "")] = m.get("name", "")
-        if not resp.get("data", {}).get("has_more"):
+        if resp.get("code") != 0:
+            raise Exception(f"List group members failed: {resp}")
+        data = resp.get("data") or {}
+        for m in data.get("items") or []:
+            member_id = m.get("member_id") or ""
+            if member_id:
+                members[member_id] = m.get("name") or ""
+        if not data.get("has_more"):
             break
-        page = resp.get("data", {}).get("page_token", "")
+        page = data.get("page_token") or ""
+        if not page:
+            raise Exception("List group members returned has_more without page_token")
+    if not members:
+        raise Exception("R&D group member list is empty, abort before creating a document")
     return members
 
 
-def get_mention_name_map(token):
-    """从模板文档获取 mention_user user_id -> 显示名 的映射"""
-    raw_url = f"/open-apis/docx/v1/documents/{TEMPLATE_DOC}/raw_content?document_id={TEMPLATE_DOC}"
-    resp = feishu_get(token, raw_url)
-    raw_content = resp.get("data", {}).get("content", "")
-    names = re.findall(r'@([^\s\n]+)', raw_content)
-
-    blocks = []
-    page = ""
-    while True:
-        path = f"/open-apis/docx/v1/documents/{TEMPLATE_DOC}/blocks/{TEMPLATE_DOC}/children?page_size=50"
-        if page:
-            path += f"&page_token={page}"
-        resp = feishu_get(token, path)
-        items = resp.get("data", {}).get("items", [])
-        blocks.extend(items)
-        if not resp["data"].get("has_more"):
-            break
-        page = resp["data"]["page_token"]
-
+def mention_user_ids(block):
     uids = []
-    for b in blocks:
-        for field in ("heading1", "heading2", "heading3", "text", "bullet", "ordered"):
-            if field in b:
-                for el in b[field].get("elements", []):
-                    if "mention_user" in el:
-                        uids.append(el["mention_user"].get("user_id", ""))
-
-    return dict(zip(uids, names))
-
-
-def clean_block(block, name_map, group_members):
-    """清理 block，移除 block_id、parent_id，替换 mention_user 为 text_run。
-    如果用户不在研发运维群中，跳过整个 block（heading3 + 后续空行）。
-    """
-    bt = block.get("block_type", 0)
-    # heading3 包含 mention_user：检查用户是否在群中
-    if bt == 5:  # heading3
-        elements = block.get("heading3", {}).get("elements", [])
-        for el in elements:
+    for field in CONTENT_FIELDS:
+        if field not in block:
+            continue
+        for el in block[field].get("elements", []):
             if "mention_user" in el:
-                uid = el["mention_user"].get("user_id", "")
-                if uid not in group_members:
-                    return None  # 跳过不在群中的用户
+                uids.append(el["mention_user"].get("user_id", ""))
+    return uids
 
-    clean = {k: v for k, v in block.items() if k not in ("block_id", "parent_id")}
-    for key in ("heading1", "heading2", "heading3", "text"):
-        if key in clean:
-            elements = clean[key].get("elements", [])
-            new_elements = []
-            for elem in elements:
-                if "mention_user" in elem:
-                    mention = elem["mention_user"]
-                    style = mention.get("text_element_style", {})
-                    uid = mention.get("user_id", "")
-                    display_name = name_map.get(uid, "用户") if name_map else "用户"
-                    new_elements.append(
-                        {
-                            "text_run": {
-                                "content": f"@{display_name}",
-                                "text_element_style": style,
-                            }
-                        }
-                    )
-                else:
-                    new_elements.append(elem)
-            clean[key]["elements"] = new_elements
+
+def clean_block(block):
+    """去掉 block_id、parent_id，mention 只保留 user_id。"""
+    clean = copy.deepcopy(block)
+    clean.pop("block_id", None)
+    clean.pop("parent_id", None)
+    for key in CONTENT_FIELDS:
+        if key not in clean:
+            continue
+        new_elements = []
+        for elem in clean[key].get("elements", []):
+            if "mention_user" in elem:
+                uid = elem["mention_user"].get("user_id", "")
+                new_elements.append({"mention_user": {"user_id": uid}})
+            else:
+                new_elements.append(elem)
+        clean[key]["elements"] = new_elements
     return clean
 
 
-def get_template_blocks(token):
+def filter_member_blocks(raw_blocks, group_members):
+    """不在研发运维群的 H3 人员，连同该小节直到下一个标题的正文一起丢掉。"""
+    kept = []
+    skipped = []
+    skipping = False
+    for block in raw_blocks:
+        if skipping:
+            if block.get("block_type") in HEADING_BLOCK_TYPES:
+                skipping = False
+            else:
+                continue
+        uids = mention_user_ids(block) if block.get("block_type") == 5 else []
+        if uids and any(uid not in group_members for uid in uids):
+            skipped.extend(uid for uid in uids if uid)
+            skipping = True
+            continue
+        kept.append(clean_block(block))
+    person_count = sum(
+        1 for block in kept if block.get("block_type") == 5 and mention_user_ids(block)
+    )
+    return kept, skipped, person_count
+
+
+def mention_to_text(mention, names):
+    uid = mention.get("user_id", "")
+    text_run = {"content": f"@{names.get(uid) or '用户'}"}
+    style = mention.get("text_element_style")
+    if style:
+        text_run["text_element_style"] = style
+    return {"text_run": text_run}
+
+
+def downgrade_mentions(block, uids, names):
+    """只把指定 user_id 的芯片改成 @名字 文本，其余 mention 保持不变。"""
+    clean = copy.deepcopy(block)
+    drop = set(uids)
+    for key in CONTENT_FIELDS:
+        if key not in clean:
+            continue
+        new_elements = []
+        for elem in clean[key].get("elements", []):
+            mention = elem.get("mention_user")
+            if mention is not None and mention.get("user_id", "") in drop:
+                new_elements.append(mention_to_text(mention, names))
+            else:
+                new_elements.append(elem)
+        clean[key]["elements"] = new_elements
+    return clean
+
+
+def get_doc_children(token, doc_id):
     all_blocks = []
     page_token = ""
     while True:
-        path = f"/open-apis/docx/v1/documents/{TEMPLATE_DOC}/blocks/{TEMPLATE_DOC}/children?page_size=50"
+        path = f"/open-apis/docx/v1/documents/{doc_id}/blocks/{doc_id}/children?page_size=50"
         if page_token:
             path += f"&page_token={page_token}"
         resp = feishu_get(token, path)
-        items = resp.get("data", {}).get("items", [])
-        all_blocks.extend(items)
-        if not resp["data"].get("has_more"):
+        if resp.get("code") != 0:
+            raise Exception(f"Get document children failed: {resp}")
+        data = resp.get("data") or {}
+        all_blocks.extend(data.get("items") or [])
+        if not data.get("has_more"):
             break
-        page_token = resp["data"]["page_token"]
+        page_token = data.get("page_token") or ""
+        if not page_token:
+            raise Exception("Get document children returned has_more without page_token")
     return all_blocks
 
 
-def write_blocks(token, doc_id, blocks):
-    url = f"/open-apis/docx/v1/documents/{doc_id}/blocks/{doc_id}/children"
+def get_template_blocks(token):
+    return get_doc_children(token, TEMPLATE_DOC)
+
+
+def post_children(token, doc_id, children):
+    return feishu_post(
+        token,
+        f"/open-apis/docx/v1/documents/{doc_id}/blocks/{doc_id}/children",
+        {"children": children},
+    )
+
+
+def write_block_fallback(token, doc_id, block, names):
+    """批次因 1770032 失败后，逐个用户把芯片降级成文本再写。"""
+    dropped = []
+    current = block
+    while True:
+        resp = post_children(token, doc_id, [current])
+        if resp.get("code") == 0:
+            return dropped
+        if resp.get("code") != 1770032:
+            raise Exception(
+                f"Write block failed: code={resp.get('code')} msg={resp.get('msg')} "
+                f"mention_user={mention_user_ids(current)}"
+            )
+        remaining = [uid for uid in mention_user_ids(current) if uid not in dropped]
+        if not remaining:
+            raise Exception(
+                f"1770032 remains after downgrading every mention: {resp}"
+            )
+        victim = remaining[0]
+        dropped.append(victim)
+        current = downgrade_mentions(block, dropped, names)
+        print(f"  Downgraded {victim} ({names.get(victim) or '用户'}) to text")
+
+
+def write_blocks(token, doc_id, blocks, names):
+    downgraded = []
     batch_size = 30
     for i in range(0, len(blocks), batch_size):
         batch = blocks[i : i + batch_size]
-        resp = feishu_post(token, url, {"children": batch})
-        if resp.get("code") != 0:
+        resp = post_children(token, doc_id, batch)
+        if resp.get("code") == 1770032:
+            print(f"  Batch {i} hit 1770032, retrying one block at a time")
+            for block in batch:
+                downgraded.extend(write_block_fallback(token, doc_id, block, names))
+                time.sleep(0.3)
+        elif resp.get("code") != 0:
             raise Exception(
-                f"Write blocks batch {i} failed: code={resp.get('code')} msg={resp.get('msg')}"
+                f"Write blocks batch {i} failed: code={resp.get('code')} "
+                f"msg={resp.get('msg')}"
             )
         time.sleep(0.5)
+    return downgraded
+
+
+def list_wiki_children(token, space_id, parent_node_token):
+    items = []
+    page = ""
+    while True:
+        path = (
+            f"/open-apis/wiki/v2/spaces/{space_id}/nodes"
+            f"?parent_node_token={parent_node_token}&page_size=50"
+        )
+        if page:
+            path += f"&page_token={page}"
+        resp = feishu_get(token, path)
+        if resp.get("code") != 0:
+            raise Exception(f"List wiki children failed: {resp}")
+        data = resp.get("data") or {}
+        items.extend(data.get("items") or [])
+        if not data.get("has_more"):
+            break
+        page = data.get("page_token") or ""
+        if not page:
+            raise Exception("List wiki children returned has_more without page_token")
+    return items
+
+
+def delete_wiki_node(token, space_id, node_token):
+    resp = feishu_request(
+        token,
+        "DELETE",
+        f"/open-apis/wiki/v2/spaces/{space_id}/nodes/{node_token}",
+    )
+    if resp.get("code") != 0:
+        raise Exception(f"Delete wiki node failed: {resp}")
+    return resp
 
 
 def create_wiki_node(token, space_id, title):
@@ -180,6 +286,7 @@ def create_wiki_node(token, space_id, title):
         token,
         f"/open-apis/wiki/v2/spaces/{space_id}/nodes",
         {
+            "parent_node_token": WIKI_PARENT_NODE,
             "node_type": "origin",
             "obj_type": "docx",
             "title": title,
@@ -221,79 +328,123 @@ def send_group_message(token, chat_id, text):
     return resp
 
 
+def wiki_url_from_node(node):
+    wiki_url = node.get("url") or ""
+    if wiki_url:
+        return wiki_url
+    node_token = node.get("node_token", "")
+    if not node_token:
+        raise Exception(f"Wiki node missing url and node_token: {node}")
+    return f"{WIKI_BASE}/{node_token}"
+
+
+def discard_node(token, node_token):
+    try:
+        delete_wiki_node(token, WIKI_SPACE_ID, node_token)
+        print(f"  Deleted wiki node {node_token}")
+    except Exception as exc:
+        print(f"  Failed to delete wiki node {node_token}: {exc}")
+
+
+def prepare_doc_node(token, title, block_count):
+    """同一天已有同名文档则复用；写了一半的删掉重建。返回 (node, created)。"""
+    existing = [
+        node
+        for node in list_wiki_children(token, WIKI_SPACE_ID, WIKI_PARENT_NODE)
+        if node.get("title") == title
+    ]
+    if not existing:
+        print("  Creating wiki node...")
+        return create_wiki_node(token, WIKI_SPACE_ID, title), True
+
+    node = existing[0]
+    if len(existing) > 1:
+        print(f"  {len(existing)} nodes titled {title}, reusing the first")
+    else:
+        print(f"  Reusing existing node {node.get('node_token')}")
+    children = get_doc_children(token, node["obj_token"])
+    if 0 < len(children) < block_count:
+        print(
+            f"  Partial document ({len(children)}/{block_count} blocks), "
+            "deleting and recreating"
+        )
+        delete_wiki_node(token, WIKI_SPACE_ID, node["node_token"])
+        return create_wiki_node(token, WIKI_SPACE_ID, title), True
+    return node, False
+
+
 def main():
     token = get_token()
     week_str = datetime.now().strftime("%Y-%m-%d")
     title = f"技术周会 {week_str}"
 
-    print(f"[1/7] Building mention name map...")
-    name_map = get_mention_name_map(token)
-    print(f"  Mapped {len(name_map)} users from template")
-
-    print(f"[2/7] Fetching R&D group members (real-time)...")
+    print("[1/6] Fetching R&D group members (real-time)...")
     group_members = get_group_members(token, RD_GROUP)
     print(f"  Group has {len(group_members)} members")
-    in_group = {uid: name for uid, name in name_map.items() if uid in group_members}
-    not_in_group = {uid: name for uid, name in name_map.items() if uid not in group_members}
-    print(f"  In group: {len(in_group)}, Not in group: {len(not_in_group)}")
-    if not_in_group:
-        print(f"  Skipped: {', '.join(not_in_group.values())}")
 
-    print(f"[3/7] Creating wiki node...")
-    node = create_wiki_node(token, WIKI_SPACE_ID, title)
+    print("[2/6] Fetching template and filtering members...")
+    raw_blocks = get_template_blocks(token)
+    clean_blocks, skipped, person_count = filter_member_blocks(raw_blocks, group_members)
+    print(f"  Template blocks: {len(raw_blocks)}")
+    if skipped:
+        print(f"  Skipped sections: {', '.join(skipped)}")
+    if person_count == 0:
+        raise Exception(
+            "No in-group person sections left after filtering, abort before creating a document"
+        )
+    print(f"  Person sections: {person_count}, blocks to write: {len(clean_blocks)}")
+
+    print("[3/6] Resolving wiki node...")
+    node, created = prepare_doc_node(token, title, len(clean_blocks))
     doc_id = node["obj_token"]
-    wiki_url = node.get("url", "")
+    node_token = node.get("node_token") or ""
+    wiki_url = wiki_url_from_node(node)
     print(f"  Doc ID: {doc_id}")
     print(f"  Wiki URL: {wiki_url}")
 
-    print(f"[4/7] Fetching template blocks...")
-    raw_blocks = get_template_blocks(token)
-    print(f"  Got {len(raw_blocks)} blocks")
+    print("[4/6] Writing blocks...")
+    started_write = False
+    try:
+        children = get_doc_children(token, doc_id)
+        if len(children) >= len(clean_blocks):
+            print(f"  Document already has {len(children)} blocks, skip write")
+            downgraded = []
+        else:
+            started_write = True
+            downgraded = write_blocks(token, doc_id, clean_blocks, group_members)
+    except Exception:
+        if started_write or created:
+            print("  Write failed, deleting this wiki node so a retry will not keep a partial doc")
+            if node_token:
+                discard_node(token, node_token)
+        raise
+    if started_write:
+        print(f"  Wrote {len(clean_blocks)} blocks")
+        if downgraded:
+            print(f"  Downgraded mentions: {', '.join(downgraded)}")
 
-    print(f"[5/7] Cleaning (filter group members) and writing blocks...")
-    clean_blocks = [cb for b in raw_blocks if (cb := clean_block(b, name_map, group_members)) is not None]
-    write_blocks(token, doc_id, clean_blocks)
-    print(f"  Wrote {len(clean_blocks)} blocks (filtered {len(raw_blocks) - len(clean_blocks)})")
+    print("[5/6] Granting edit permission to R&D group and notify group...")
+    for chat_id, label in ((RD_GROUP, "R&D"), (NOTIFY_GROUP, "notify")):
+        perm_resp = grant_group_permission(token, doc_id, chat_id)
+        if perm_resp.get("code") != 0:
+            raise Exception(f"Grant {label} permission failed: {perm_resp}")
+        print(f"  {label} permission ok")
 
-    print(f"[6/7] Granting edit permission to R&D group...")
-    perm_resp = grant_group_permission(token, doc_id, RD_GROUP)
-    print(f"  Permission result: {perm_resp.get('code')} {perm_resp.get('msg')}")
-
-    print(f"[7/7] Sending notification to group...")
-    # Build @ list for in-group users using post message type
-    at_elements = []
-    for uid, name in in_group.items():
-        at_elements.append({"tag": "at", "user_id": uid, "text": f"@{name}"})
-    at_elements.append({"tag": "text", "text": "\n请各负责人填写本周进展。"})
-
-    content = [
-        [{"tag": "text", "text": f"📋 技术周会文档已创建"}],
-        [{"tag": "text", "text": f"📅 {week_str}"}],
-        [{"tag": "a", "text": f"🔗 {wiki_url}", "href": wiki_url}],
-        [{"tag": "text", "text": ""}],  # 空行
-        at_elements
-    ]
-
-    msg_resp = feishu_post(
+    print("[6/6] Sending notification to group...")
+    msg = f"技术周会文档已创建，请大家填写本周周报。\n文档链接：{wiki_url}"
+    msg_resp = send_group_message(token, NOTIFY_GROUP, msg)
+    if msg_resp.get("code") != 0:
+        raise Exception(f"Send message failed: {msg_resp}")
+    msg_id = msg_resp["data"]["message_id"]
+    urgent_resp = feishu_post(
         token,
-        "/open-apis/im/v1/messages?receive_id_type=chat_id",
-        {
-            "receive_id": NOTIFY_GROUP,
-            "msg_type": "post",
-            "content": json.dumps({"zh_cn": {"title": "技术周会文档已创建", "content": content}}),
-        },
+        f"/open-apis/im/v1/messages/{msg_id}/urgent_app?user_id_type=open_id",
+        {"user_id_list": [TARGET_USER]},
+        method="PATCH",
     )
-    if msg_resp.get("code") == 0:
-        msg_id = msg_resp["data"]["message_id"]
-        feishu_post(
-            token,
-            f"/open-apis/im/v1/messages/{msg_id}/urgent_app?user_id_type=open_id",
-            {"user_id_list": [TARGET_USER]},
-            method="PATCH",
-        )
-        print(f"  Message sent with @mentions + urgent to 大卫")
-    else:
-        print(f"  Message send failed: {msg_resp}")
+    if urgent_resp.get("code") != 0:
+        raise Exception(f"Urgent notify failed: {urgent_resp}")
+    print("  Message sent and urgent delivered to 大卫")
 
     print(f"\nDone! Wiki URL: {wiki_url}")
     return wiki_url

@@ -22,7 +22,7 @@ test群 oc_8b8978c0510660ec4da3c52ebc7bb9a3。多个bot：hermes(ou_41e5c8ebbe0e
 §
 生图：DashScope wan2.6-t2i（北京）。Key 见 `.hermes/.env`。Workspace: `llm-2mnugdosx628stt0`。Gemini 备用。
 §
-**技术周会**：脚本 `~/.hermes/scripts/weekly_tech_meeting.py`，cron `468a36759729`（周五 9:00）。模板 `KtOLd1e7CoSXkNxgF7jcDiI7nrd`，wiki space `7612892588537892047`，通知群 `oc_611b7861968a34f8c2f538f67410b629`。⚠️ wiki API 忽略 obj_token，正确流程：先创建 wiki 节点（不传 obj_token）→ 获取自动生成的 obj_token → 写 blocks。给大卫（ou_dfc3579b6b0ced44f7745f24ace77b73）开 full_access。
+**技术周会**：脚本 `scripts/weekly_tech_meeting.py`，cron `468a36759729`（周五 9:00）。模板 `KtOLd1e7CoSXkNxgF7jcDiI7nrd`，wiki space `7612892588537892047`，父节点 `AAGlw95lZi4sUqk78vzc7mkHnIb`，通知群 test `oc_8b8978c0510660ec4da3c52ebc7bb9a3`。先创建 wiki 节点（不传 obj_token）→ 写 blocks。文档权限给研发运维群和 test 群。加急大卫 `ou_dfc3579b6b0ced44f7745f24ace77b73`。催填脚本 `scripts/weekly_report_reminder.py`（周一 11:00），认 `YYYY-MM-DD` 与 `YYYY年M月D日` 标题，@ 未填的人发到同一 test 群。
 §
 研发团队组织架构（R&D）：愚者已离职，账号已停用，不再授权、不加急、不 @。架构师大卫、安卓(梧桐/天璇/洛基/白羊/猎户)、JAVA黑洞、运维天行者、后端(海晨/周行/六芒星/螺旋)、AIGC云天明、AI南斗/星轨、Flutter(辰星/启元)、服务端九九、测试(闪电/大羊星/白洞/彗星/开拓者)。待招：golang后端、AI算法、算法实习生、外包测试、Linux工程师。团队使用代号/昵称文化。
 §
