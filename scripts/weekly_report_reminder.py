@@ -14,7 +14,7 @@ import yaml
 
 CONFIG_PATH = os.path.expanduser("~/.hermes/config.yaml")
 WIKI_PARENT_NODE = "AAGlw95lZi4sUqk78vzc7mkHnIb"
-NOTIFY_GROUP = "oc_8b8978c0510660ec4da3c52ebc7bb9a3"  # test 测试群
+NOTIFY_GROUP = "oc_611b7861968a34f8c2f538f67410b629"  # 研发运维群
 WIKI_BASE = "https://ta1mz8n1mps.feishu.cn/wiki"
 # 模板提示整行出现时不算已填写。用户自己写的「无」仍然算已填写。
 PLACEHOLDER_LINES = {

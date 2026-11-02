@@ -1,6 +1,6 @@
 ---
 name: weekly-report-reminder
-description: 每周一 11:00 自动检查技术周会知识库中的最新周报文档，分析谁未填写，并 @ 未填写的人发送到 test 群。
+description: 每周一 11:00 自动检查技术周会知识库中的最新周报文档，分析谁未填写，并 @ 未填写的人发送到研发运维群。
 category: productivity
 ---
 
@@ -25,9 +25,9 @@ python scripts/weekly_report_reminder.py
 - 把文档建在知识库父节点 `AAGlw95lZi4sUqk78vzc7mkHnIb` 下
 - 标题为 `技术周会 YYYY-MM-DD`（同时兼容旧标题 `YYYY年M月D日`）
 - 各人小节是 H3 里的飞书 `mention_user`（通讯录芯片），不是纯文本 `@用户`
-- 创建通知发到 test 群 `oc_8b8978c0510660ec4da3c52ebc7bb9a3`
+- 创建通知发到研发运维群 `oc_611b7861968a34f8c2f538f67410b629`
 
-催填必须认两种标题日期，用 H3 的 `user_id` 做 @，消息发到同一个 test 群。
+催填必须认两种标题日期，用 H3 的 `user_id` 做 @，消息发到同一个研发运维群。
 
 ## 任务流程
 
@@ -61,9 +61,9 @@ items.sort(key=lambda x: extract_date_from_title(x.get("title", "")), reverse=Tr
 - 标题同一行 `@名字` 后面的文字算已填写。模板占位行（如「请填写」「（请填写本周工作）」）不算。
 - 催填 @ 用配对得到的 `user_id`。
 
-### 4. 发送催填消息到 test 群
+### 4. 发送催填消息到研发运维群
 
-目标群: `oc_8b8978c0510660ec4da3c52ebc7bb9a3`
+目标群: `oc_611b7861968a34f8c2f538f67410b629`
 
 ```python
 at_tags = "".join(f'<at user_id="{uid}">{name}</at>' for uid, name in unfilled)
@@ -85,6 +85,6 @@ cron 输出打印文档标题、已填写、未填写、消息是否发出。
 
 - 7 天窗口内有一份读不到时跳过该份。全部读不到才报错退出，给文档补上应用协作者后重跑。不要改去催 7 天以前的周报。
 - 标题日期同时认 `YYYY-MM-DD` 和 `YYYY年M月D日`，并且标题里要有「技术周会」。
-- 目标群：`oc_8b8978c0510660ec4da3c52ebc7bb9a3`（test）
+- 目标群：`oc_611b7861968a34f8c2f538f67410b629`（研发运维群）
 - 知识库 wiki token：`AAGlw95lZi4sUqk78vzc7mkHnIb`
 - App ID: `cli_a97b1e4633f99cb0`

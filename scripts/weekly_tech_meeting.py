@@ -16,8 +16,8 @@ CONFIG_PATH = os.path.expanduser("~/.hermes/config.yaml")
 TEMPLATE_DOC = "KtOLd1e7CoSXkNxgF7jcDiI7nrd"
 WIKI_SPACE_ID = "7612892588537892047"
 WIKI_PARENT_NODE = "AAGlw95lZi4sUqk78vzc7mkHnIb"  # 技术周会知识库父节点
-RD_GROUP = "oc_611b7861968a34f8c2f538f67410b629"  # 研发运维群（实时查询成员）
-NOTIFY_GROUP = "oc_8b8978c0510660ec4da3c52ebc7bb9a3"  # 通知群（test测试群）
+RD_GROUP = "oc_611b7861968a34f8c2f538f67410b629"  # 研发运维群（成员名单、创建通知）
+TEST_GROUP = "oc_8b8978c0510660ec4da3c52ebc7bb9a3"  # test 群，仅文档权限
 TARGET_USER = "ou_dfc3579b6b0ced44f7745f24ace77b73"  # 大卫（加急通知）
 WIKI_BASE = "https://ta1mz8n1mps.feishu.cn/wiki"
 CONTENT_FIELDS = ("heading1", "heading2", "heading3", "text", "bullet", "ordered")
@@ -423,16 +423,16 @@ def main():
         if downgraded:
             print(f"  Downgraded mentions: {', '.join(downgraded)}")
 
-    print("[5/6] Granting edit permission to R&D group and notify group...")
-    for chat_id, label in ((RD_GROUP, "R&D"), (NOTIFY_GROUP, "notify")):
+    print("[5/6] Granting edit permission to R&D group and test group...")
+    for chat_id, label in ((RD_GROUP, "R&D"), (TEST_GROUP, "test")):
         perm_resp = grant_group_permission(token, doc_id, chat_id)
         if perm_resp.get("code") != 0:
             raise Exception(f"Grant {label} permission failed: {perm_resp}")
         print(f"  {label} permission ok")
 
-    print("[6/6] Sending notification to group...")
+    print("[6/6] Sending notification to R&D group...")
     msg = f"技术周会文档已创建，请大家填写本周周报。\n文档链接：{wiki_url}"
-    msg_resp = send_group_message(token, NOTIFY_GROUP, msg)
+    msg_resp = send_group_message(token, RD_GROUP, msg)
     if msg_resp.get("code") != 0:
         raise Exception(f"Send message failed: {msg_resp}")
     msg_id = msg_resp["data"]["message_id"]
