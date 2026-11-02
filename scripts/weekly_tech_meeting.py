@@ -18,7 +18,8 @@ WIKI_SPACE_ID = "7612892588537892047"
 WIKI_PARENT_NODE = "AAGlw95lZi4sUqk78vzc7mkHnIb"  # 技术周会知识库父节点
 RD_GROUP = "oc_611b7861968a34f8c2f538f67410b629"  # 研发运维群（成员名单、创建通知）
 TEST_GROUP = "oc_8b8978c0510660ec4da3c52ebc7bb9a3"  # test 群，仅文档权限
-TARGET_USER = "ou_dfc3579b6b0ced44f7745f24ace77b73"  # 大卫（加急通知）
+TARGET_USER = "ou_dfc3579b6b0ced44f7745f24ace77b73"  # 大卫。若这是其他应用的 open_id，改用本应用在研发运维群里拿到的 open_id
+URGENT_NAME = "大卫"
 WIKI_BASE = "https://ta1mz8n1mps.feishu.cn/wiki"
 CONTENT_FIELDS = ("heading1", "heading2", "heading3", "text", "bullet", "ordered")
 # block_type 3–11 是各级标题。跳过不在群里的人时，连同其小节正文一起丢掉，直到下一个标题。
@@ -89,6 +90,35 @@ def get_group_members(token, chat_id):
     if not members:
         raise Exception("R&D group member list is empty, abort before creating a document")
     return members
+
+
+def resolve_urgent_open_id(group_members, configured_open_id, display_name):
+    """加急必须使用当前应用自己的 open_id。群成员接口返回的 member_id 就是。
+
+    配置里的 ou_ 若来自其他应用，不会出现在这份名单里，此时按姓名再匹配一次。
+    """
+    if configured_open_id in group_members:
+        return configured_open_id
+    exact = [uid for uid, name in group_members.items() if name == display_name]
+    partial = [
+        uid
+        for uid, name in group_members.items()
+        if uid not in exact and display_name and display_name in (name or "")
+    ]
+    chosen = exact or partial
+    if len(chosen) == 1:
+        uid = chosen[0]
+        print(
+            f"  Configured open_id is not in this app's member list; "
+            f"use {uid} ({group_members[uid]})"
+        )
+        return uid
+    shown = ", ".join(f"{group_members[uid]}={uid}" for uid in chosen) or "none"
+    raise Exception(
+        f"Cannot resolve {display_name} for urgent_app. "
+        f"Configured open_id {configured_open_id} belongs to another app or is not in the R&D group. "
+        f"Name matches: {shown}"
+    )
 
 
 def mention_user_ids(block):
@@ -380,7 +410,9 @@ def main():
 
     print("[1/6] Fetching R&D group members (real-time)...")
     group_members = get_group_members(token, RD_GROUP)
+    urgent_open_id = resolve_urgent_open_id(group_members, TARGET_USER, URGENT_NAME)
     print(f"  Group has {len(group_members)} members")
+    print(f"  Urgent target: {urgent_open_id} ({group_members.get(urgent_open_id, URGENT_NAME)})")
 
     print("[2/6] Fetching template and filtering members...")
     raw_blocks = get_template_blocks(token)
@@ -439,7 +471,7 @@ def main():
     urgent_resp = feishu_post(
         token,
         f"/open-apis/im/v1/messages/{msg_id}/urgent_app?user_id_type=open_id",
-        {"user_id_list": [TARGET_USER]},
+        {"user_id_list": [urgent_open_id]},
         method="PATCH",
     )
     if urgent_resp.get("code") != 0:
