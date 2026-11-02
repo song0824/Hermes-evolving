@@ -1,0 +1,23 @@
+# SLS 数据产物
+sls_daily_*.json
+sls_error_*.json
+sls_analytical.json
+sls_keyword_counts.json
+sls_keyword_analysis.json
+sls_supplement_*.json
+sls_daily_run.json
+sls_ling_server_error_data_*.json
+sls_ling_server_error_report_*.json
+sls_samples.json
+
+# 日报产物（由脚本生成）
+sls_report_*.md
+sls_daily_report_*.md
+
+# 临时/缓存
+__pycache__/
+*.pyc
+*.pyo
+.env
+storage_state.json
+*.cache

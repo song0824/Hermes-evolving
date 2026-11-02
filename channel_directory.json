@@ -1,0 +1,103 @@
+{
+  "updated_at": "2026-11-02T11:09:58.619440",
+  "platforms": {
+    "telegram": [],
+    "discord": [],
+    "whatsapp": [],
+    "slack": [],
+    "signal": [],
+    "mattermost": [],
+    "matrix": [],
+    "homeassistant": [],
+    "email": [],
+    "sms": [],
+    "dingtalk": [],
+    "msgraph_webhook": [],
+    "feishu": [
+      {
+        "id": "oc_86e032cc46409db6151b7b2101cb2858",
+        "name": "oc_86e032cc46409db6151b7b2101cb2858",
+        "type": "dm",
+        "thread_id": null
+      },
+      {
+        "id": "oc_611b7861968a34f8c2f538f67410b629",
+        "name": "⬆️研发运维(周五不发版🔪🔪🔪)",
+        "type": "group",
+        "thread_id": null
+      },
+      {
+        "id": "oc_50ea09c95c2dbc4f5464fc340f797ba8",
+        "name": "数据分析",
+        "type": "group",
+        "thread_id": null
+      },
+      {
+        "id": "oc_86e032cc46409db6151b7b2101cb2858:om_x100b678f1cd09918b2e71a07895b4b1",
+        "name": "oc_86e032cc46409db6151b7b2101cb2858 / topic om_x100b678f1cd09918b2e71a07895b4b1",
+        "type": "dm",
+        "thread_id": "om_x100b678f1cd09918b2e71a07895b4b1"
+      },
+      {
+        "id": "oc_86e032cc46409db6151b7b2101cb2858:omt_19ee3de8f7549c82",
+        "name": "oc_86e032cc46409db6151b7b2101cb2858 / topic omt_19ee3de8f7549c82",
+        "type": "dm",
+        "thread_id": "omt_19ee3de8f7549c82"
+      },
+      {
+        "id": "oc_86e032cc46409db6151b7b2101cb2858:om_x100b65039e3ba0a4b12cf8c0ace6890",
+        "name": "oc_86e032cc46409db6151b7b2101cb2858 / topic om_x100b65039e3ba0a4b12cf8c0ace6890",
+        "type": "dm",
+        "thread_id": "om_x100b65039e3ba0a4b12cf8c0ace6890"
+      },
+      {
+        "id": "oc_86e032cc46409db6151b7b2101cb2858:om_x100b646b51a834a0b2918222f69ad81",
+        "name": "oc_86e032cc46409db6151b7b2101cb2858 / topic om_x100b646b51a834a0b2918222f69ad81",
+        "type": "dm",
+        "thread_id": "om_x100b646b51a834a0b2918222f69ad81"
+      },
+      {
+        "id": "oc_86e032cc46409db6151b7b2101cb2858:om_x100b63b23c79d8a0b49b702bf256f6f",
+        "name": "oc_86e032cc46409db6151b7b2101cb2858 / topic om_x100b63b23c79d8a0b49b702bf256f6f",
+        "type": "dm",
+        "thread_id": "om_x100b63b23c79d8a0b49b702bf256f6f"
+      },
+      {
+        "id": "oc_94dda2b66fcb535ac82f0c201ad3f8bb",
+        "name": "报警问题治理",
+        "type": "group",
+        "thread_id": null
+      },
+      {
+        "id": "oc_94dda2b66fcb535ac82f0c201ad3f8bb:om_x100b6232c1f6d8b4ce5dc33226f0c46",
+        "name": "报警问题治理 / topic om_x100b6232c1f6d8b4ce5dc33226f0c46",
+        "type": "group",
+        "thread_id": "om_x100b6232c1f6d8b4ce5dc33226f0c46"
+      },
+      {
+        "id": "oc_86e032cc46409db6151b7b2101cb2858:om_x100b625a8c9670a4dddbc9819801dc1",
+        "name": "oc_86e032cc46409db6151b7b2101cb2858 / topic om_x100b625a8c9670a4dddbc9819801dc1",
+        "type": "dm",
+        "thread_id": "om_x100b625a8c9670a4dddbc9819801dc1"
+      },
+      {
+        "id": "oc_8b8978c0510660ec4da3c52ebc7bb9a3",
+        "name": "test",
+        "type": "group",
+        "thread_id": null
+      },
+      {
+        "id": "oc_8b8978c0510660ec4da3c52ebc7bb9a3:om_x100b61730a8558b0b0bbf2e8543b620",
+        "name": "test / topic om_x100b61730a8558b0b0bbf2e8543b620",
+        "type": "group",
+        "thread_id": "om_x100b61730a8558b0b0bbf2e8543b620"
+      }
+    ],
+    "wecom": [],
+    "wecom_callback": [],
+    "weixin": [],
+    "bluebubbles": [],
+    "qqbot": [],
+    "yuanbao": []
+  }
+}

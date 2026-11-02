@@ -1,0 +1,30 @@
+# OpenSSL 3.0 Legacy Compatibility Config
+# Use with: OPENSSL_CONF=/path/to/this/file openvpn --config client.ovpn
+#
+# This enables the legacy provider and relaxes TLS restrictions for
+# connecting to old OpenVPN servers (pre-2.4) that use:
+# - TLS 1.0/1.1
+# - MD5/SHA1 signatures
+# - BF-CBC or other deprecated ciphers
+#
+# Verify it works: openssl list -providers (should show legacy: active)
+
+openssl_conf = openssl_init
+
+[openssl_init]
+providers = provider_sect
+
+[provider_sect]
+default = default_sect
+legacy = legacy_sect
+
+[default_sect]
+activate = 1
+
+[legacy_sect]
+activate = 1
+
+[system_default_sect]
+CipherString = DEFAULT:@SECLEVEL=0
+MinProtocol = TLSv1
+SignatureAlgorithms = RSA-PSS+SHA256:RSA-PSS+SHA384:RSA-PSS+SHA512:RSA+SHA256:RSA+SHA384:RSA+SHA512:RSA+SHA224:RSA+SHA1:ECDSA+SHA256:ECDSA+SHA384:ECDSA+SHA512:ECDSA+SHA224:ECDSA+SHA1

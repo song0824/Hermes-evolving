@@ -1,0 +1,68 @@
+# ===== 大型/运行时数据 =====
+state.db*
+response_store.db*
+kanban.db
+
+# ===== 会话/日志/缓存 =====
+sessions/
+logs/
+cache/
+audio_cache/
+image_cache/
+temp_vision_images/
+checkpoints/
+cron/
+
+# ===== 虚拟环境 =====
+hermes-agent/venv/
+**/venv/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+
+# ===== 敏感配置 =====
+.env
+*.key
+*.pem
+first-boot-password.txt
+
+# ===== macOS 残留 =====
+._*
+.DS_Store
+
+# ===== 其他 =====
+*.pid
+*.lock
+gateway_state.json
+processes.json
+feishu_seen_message_ids.json
+*.log
+temp_*.py
+agent-export-*.tar.gz
+export_*.md
+feishu-skills-export-*.tar.gz
+.update_check
+
+# ===== RDS 数据 =====
+rds/
+
+# ===== 第三方平台 =====
+platforms/
+weixin/
+sandboxes/
+hooks/
+pairing/
+plugins/
+
+# ===== 其他 =====
+backup/
+webui/
+
+# ===== cron 历史输出 =====
+cron/
+
+# ===== skills curator 备份 (含敏感信息) =====
+skills/.curator_backups/
+
+# ===== bin (venv binaries) =====
+bin/
