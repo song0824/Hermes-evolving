@@ -160,6 +160,29 @@ def test_script_failure_uses_stdout_not_stderr(tmp_path, monkeypatch):
     assert "ou_should_not_surface" not in body["summary"]
 
 
+def test_agent_root_uses_directory_that_contains_aiagent(tmp_path, monkeypatch):
+    real = tmp_path / "real-agent"
+    real.mkdir()
+    (real / "run_agent.py").write_text("class AIAgent:\n    pass\n", encoding="utf-8")
+    decoy = tmp_path / "decoy"
+    decoy.mkdir()
+    (decoy / "run_agent.py").write_text("print('sls script')\n", encoding="utf-8")
+    monkeypatch.setenv("HERMES_AGENT_ROOT", str(decoy))
+    try:
+        bothub_invoke.resolve_agent_root()
+        raise AssertionError("sls script was accepted as the agent")
+    except RuntimeError as exc:
+        assert "AIAgent" in str(exc)
+    monkeypatch.setenv("HERMES_AGENT_ROOT", str(real))
+    assert bothub_invoke.resolve_agent_root() == real
+
+
+def test_restored_run_agent_is_the_agent_module():
+    source = (bothub_invoke.HERMES_ROOT / "hermes-agent" / "run_agent.py").read_text(encoding="utf-8")
+    assert "class AIAgent" in source
+    assert "Call SLS API through the RDS daemon" not in source
+
+
 def test_job_lock_blocks_second_holder(tmp_path):
     first = job_lock.acquire_job_lock("weekly-report-test", tmp_path)
     second = job_lock.acquire_job_lock("weekly-report-test", tmp_path)

@@ -17,6 +17,7 @@ CHAT_TIMEOUT = 150
 BIND_HOST = "127.0.0.1"
 BIND_PORT = 8643
 AUTH_ENV = "API_SERVER_KEY"
+AGENT_ROOT_ENV = "HERMES_AGENT_ROOT"
 TARGET_BOT = "hermes-evolving"
 PROTOCOL_VERSION = "1.0"
 SKILL_RULE = "本轮只按该技能处理下面的用户原文；不要再加载其他技能；结果用飞书纯文本，不要输出思考过程。"
@@ -157,14 +158,25 @@ def run_script(
     )
 
 
-def run_skill_turn(system_prompt: str, text: str, context: list[str]) -> dict[str, object]:
-    agent_root = HERMES_ROOT / "hermes-agent"
-    source = (agent_root / "run_agent.py").read_text(encoding="utf-8")
-    if "class AIAgent" not in source:
+def resolve_agent_root() -> Path:
+    configured = os.environ.get(AGENT_ROOT_ENV, "").strip()
+    root = Path(configured).expanduser() if configured else HERMES_ROOT / "hermes-agent"
+    source = root / "run_agent.py"
+    if not source.is_file() or "class AIAgent" not in source.read_text(encoding="utf-8"):
         raise RuntimeError("AIAgent is not available")
+    return root
+
+
+def run_skill_turn(system_prompt: str, text: str, context: list[str]) -> dict[str, object]:
+    agent_root = resolve_agent_root()
     agent_path = str(agent_root)
-    if agent_path not in sys.path:
-        sys.path.insert(0, agent_path)
+    if agent_path in sys.path:
+        sys.path.remove(agent_path)
+    sys.path.insert(0, agent_path)
+    loaded = sys.modules.get("run_agent")
+    loaded_file = str(getattr(loaded, "__file__", "") or "")
+    if loaded is not None and Path(loaded_file).resolve() != (agent_root / "run_agent.py").resolve():
+        del sys.modules["run_agent"]
     from hermes_constants import get_hermes_home
     from hermes_cli.env_loader import load_hermes_dotenv
 
@@ -287,7 +299,7 @@ def _run_skill_capability(
         try:
             box["result"] = run_skill_turn(system_prompt, text, context)
         except Exception as exc:
-            box["error"] = exc.__class__.__name__
+            box["error"] = f"{exc.__class__.__name__}: {exc}"
 
     worker = threading.Thread(target=target, daemon=True)
     worker.start()
