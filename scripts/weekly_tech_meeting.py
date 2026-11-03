@@ -3,21 +3,46 @@
 技术周会文档自动复制脚本
 每周五 9:00 运行，从模板复制文档到 wiki 空间并通知群
 """
+import argparse
 import copy
 import urllib.request
 import http.client
 import json
 import yaml
 import os
+import sys
 import time
+
+from job_lock import acquire_job_lock, release_job_lock
 from datetime import datetime
 
 CONFIG_PATH = os.path.expanduser("~/.hermes/config.yaml")
 TEMPLATE_DOC = "KtOLd1e7CoSXkNxgF7jcDiI7nrd"
 WIKI_SPACE_ID = "7612892588537892047"
 WIKI_PARENT_NODE = "AAGlw95lZi4sUqk78vzc7mkHnIb"  # 技术周会知识库父节点
-RD_GROUP = "oc_611b7861968a34f8c2f538f67410b629"  # 研发运维群（成员名单、创建通知）
-TEST_GROUP = "oc_8b8978c0510660ec4da3c52ebc7bb9a3"  # test 群，仅文档权限
+RD_GROUP = "oc_611b7861968a34f8c2f538f67410b629"  # 研发运维群（成员名单；未改通知目标时也用于创建通知）
+TEST_GROUP = "oc_8b8978c0510660ec4da3c52ebc7bb9a3"  # test 群
+
+
+def log(message: str) -> None:
+    print(message, file=sys.stderr)
+
+
+def permission_targets(notify_chat: str = "") -> tuple[tuple[str, str], ...]:
+    override = notify_chat.strip()
+    if override:
+        return ((override, "notify"),)
+    return ((RD_GROUP, "R&D"), (TEST_GROUP, "test"))
+
+
+def message_chat_id(notify_chat: str = "") -> str:
+    return notify_chat.strip() or RD_GROUP
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--notify-chat", default="")
+    return parser.parse_args(argv)
 TARGET_USER = "ou_dfc3579b6b0ced44f7745f24ace77b73"  # 大卫。若这是其他应用的 open_id，改用本应用在研发运维群里拿到的 open_id
 URGENT_NAME = "大卫"
 WIKI_BASE = "https://ta1mz8n1mps.feishu.cn/wiki"
@@ -108,7 +133,7 @@ def resolve_urgent_open_id(group_members, configured_open_id, display_name):
     chosen = exact or partial
     if len(chosen) == 1:
         uid = chosen[0]
-        print(
+        log(
             f"  Configured open_id is not in this app's member list; "
             f"use {uid} ({group_members[uid]})"
         )
@@ -254,7 +279,7 @@ def write_block_fallback(token, doc_id, block, names):
         victim = remaining[0]
         dropped.append(victim)
         current = downgrade_mentions(block, dropped, names)
-        print(f"  Downgraded {victim} ({names.get(victim) or '用户'}) to text")
+        log(f"  Downgraded {victim} ({names.get(victim) or '用户'}) to text")
 
 
 def write_blocks(token, doc_id, blocks, names):
@@ -264,7 +289,7 @@ def write_blocks(token, doc_id, blocks, names):
         batch = blocks[i : i + batch_size]
         resp = post_children(token, doc_id, batch)
         if resp.get("code") == 1770032:
-            print(f"  Batch {i} hit 1770032, retrying one block at a time")
+            log(f"  Batch {i} hit 1770032, retrying one block at a time")
             for block in batch:
                 downgraded.extend(write_block_fallback(token, doc_id, block, names))
                 time.sleep(0.3)
@@ -371,9 +396,9 @@ def wiki_url_from_node(node):
 def discard_node(token, node_token):
     try:
         delete_wiki_node(token, WIKI_SPACE_ID, node_token)
-        print(f"  Deleted wiki node {node_token}")
+        log(f"  Deleted wiki node {node_token}")
     except Exception as exc:
-        print(f"  Failed to delete wiki node {node_token}: {exc}")
+        log(f"  Failed to delete wiki node {node_token}: {exc}")
 
 
 def prepare_doc_node(token, title, block_count):
@@ -384,17 +409,17 @@ def prepare_doc_node(token, title, block_count):
         if node.get("title") == title
     ]
     if not existing:
-        print("  Creating wiki node...")
+        log("  Creating wiki node...")
         return create_wiki_node(token, WIKI_SPACE_ID, title), True
 
     node = existing[0]
     if len(existing) > 1:
-        print(f"  {len(existing)} nodes titled {title}, reusing the first")
+        log(f"  {len(existing)} nodes titled {title}, reusing the first")
     else:
-        print(f"  Reusing existing node {node.get('node_token')}")
+        log(f"  Reusing existing node {node.get('node_token')}")
     children = get_doc_children(token, node["obj_token"])
     if 0 < len(children) < block_count:
-        print(
+        log(
             f"  Partial document ({len(children)}/{block_count} blocks), "
             "deleting and recreating"
         )
@@ -403,83 +428,106 @@ def prepare_doc_node(token, title, block_count):
     return node, False
 
 
-def main():
+def run_meeting(notify_chat: str = "") -> str:
     token = get_token()
     week_str = datetime.now().strftime("%Y-%m-%d")
     title = f"技术周会 {week_str}"
 
-    print("[1/6] Fetching R&D group members (real-time)...")
+    log("[1/6] Fetching R&D group members (real-time)...")
     group_members = get_group_members(token, RD_GROUP)
     urgent_open_id = resolve_urgent_open_id(group_members, TARGET_USER, URGENT_NAME)
-    print(f"  Group has {len(group_members)} members")
-    print(f"  Urgent target: {urgent_open_id} ({group_members.get(urgent_open_id, URGENT_NAME)})")
+    log(f"  Group has {len(group_members)} members")
+    log(f"  Urgent target: {urgent_open_id} ({group_members.get(urgent_open_id, URGENT_NAME)})")
 
-    print("[2/6] Fetching template and filtering members...")
+    log("[2/6] Fetching template and filtering members...")
     raw_blocks = get_template_blocks(token)
     clean_blocks, skipped, person_count = filter_member_blocks(raw_blocks, group_members)
-    print(f"  Template blocks: {len(raw_blocks)}")
+    log(f"  Template blocks: {len(raw_blocks)}")
     if skipped:
-        print(f"  Skipped sections: {', '.join(skipped)}")
+        log(f"  Skipped sections: {', '.join(skipped)}")
     if person_count == 0:
         raise Exception(
             "No in-group person sections left after filtering, abort before creating a document"
         )
-    print(f"  Person sections: {person_count}, blocks to write: {len(clean_blocks)}")
+    log(f"  Person sections: {person_count}, blocks to write: {len(clean_blocks)}")
 
-    print("[3/6] Resolving wiki node...")
+    log("[3/6] Resolving wiki node...")
     node, created = prepare_doc_node(token, title, len(clean_blocks))
     doc_id = node["obj_token"]
     node_token = node.get("node_token") or ""
     wiki_url = wiki_url_from_node(node)
-    print(f"  Doc ID: {doc_id}")
-    print(f"  Wiki URL: {wiki_url}")
+    log(f"  Doc ID: {doc_id}")
+    log(f"  Wiki URL: {wiki_url}")
 
-    print("[4/6] Writing blocks...")
+    log("[4/6] Writing blocks...")
     started_write = False
     try:
         children = get_doc_children(token, doc_id)
         if len(children) >= len(clean_blocks):
-            print(f"  Document already has {len(children)} blocks, skip write")
+            log(f"  Document already has {len(children)} blocks, skip write")
             downgraded = []
         else:
             started_write = True
             downgraded = write_blocks(token, doc_id, clean_blocks, group_members)
     except Exception:
         if started_write or created:
-            print("  Write failed, deleting this wiki node so a retry will not keep a partial doc")
+            log("  Write failed, deleting this wiki node so a retry will not keep a partial doc")
             if node_token:
                 discard_node(token, node_token)
         raise
     if started_write:
-        print(f"  Wrote {len(clean_blocks)} blocks")
+        log(f"  Wrote {len(clean_blocks)} blocks")
         if downgraded:
-            print(f"  Downgraded mentions: {', '.join(downgraded)}")
+            log(f"  Downgraded mentions: {', '.join(downgraded)}")
 
-    print("[5/6] Granting edit permission to R&D group and test group...")
-    for chat_id, label in ((RD_GROUP, "R&D"), (TEST_GROUP, "test")):
+    targets = permission_targets(notify_chat)
+    log("[5/6] Granting edit permission...")
+    for chat_id, label in targets:
         perm_resp = grant_group_permission(token, doc_id, chat_id)
         if perm_resp.get("code") != 0:
-            raise Exception(f"Grant {label} permission failed: {perm_resp}")
-        print(f"  {label} permission ok")
+            log(f"Grant {label} permission failed: code={perm_resp.get('code')} msg={perm_resp.get('msg')}")
+            print(f"周会文档已创建，但权限没有授予。文档链接：{wiki_url}")
+            sys.exit(1)
+        log(f"  {label} permission ok")
 
-    print("[6/6] Sending notification to R&D group...")
+    destination = message_chat_id(notify_chat)
+    log("[6/6] Sending notification...")
     msg = f"技术周会文档已创建，请大家填写本周周报。\n文档链接：{wiki_url}"
-    msg_resp = send_group_message(token, RD_GROUP, msg)
+    msg_resp = send_group_message(token, destination, msg)
     if msg_resp.get("code") != 0:
-        raise Exception(f"Send message failed: {msg_resp}")
-    msg_id = msg_resp["data"]["message_id"]
-    urgent_resp = feishu_post(
-        token,
-        f"/open-apis/im/v1/messages/{msg_id}/urgent_app?user_id_type=open_id",
-        {"user_id_list": [urgent_open_id]},
-        method="PATCH",
-    )
-    if urgent_resp.get("code") != 0:
-        raise Exception(f"Urgent notify failed: {urgent_resp}")
-    print("  Message sent and urgent delivered to 大卫")
+        log(f"Send message failed: code={msg_resp.get('code')} msg={msg_resp.get('msg')}")
+        print(f"周会文档已创建，但通知没有发出。文档链接：{wiki_url}")
+        sys.exit(1)
+    if notify_chat.strip():
+        log("  Message sent, urgent skipped")
+    else:
+        msg_id = msg_resp["data"]["message_id"]
+        urgent_resp = feishu_post(
+            token,
+            f"/open-apis/im/v1/messages/{msg_id}/urgent_app?user_id_type=open_id",
+            {"user_id_list": [urgent_open_id]},
+            method="PATCH",
+        )
+        if urgent_resp.get("code") != 0:
+            log(f"Urgent notify failed: code={urgent_resp.get('code')} msg={urgent_resp.get('msg')}")
+            print(f"周会通知已发送，但加急失败。文档链接：{wiki_url}")
+            sys.exit(1)
+        log("  Message sent and urgent delivered to 大卫")
 
-    print(f"\nDone! Wiki URL: {wiki_url}")
+    print(f"技术周会文档已创建：{wiki_url}")
     return wiki_url
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
+    lock = acquire_job_lock("weekly_tech_meeting")
+    if lock is None:
+        print("SKIP|上一次建周会还在执行，本次没有再跑")
+        return
+    try:
+        run_meeting(args.notify_chat)
+    finally:
+        release_job_lock(lock)
 
 
 if __name__ == "__main__":

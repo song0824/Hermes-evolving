@@ -3,18 +3,36 @@
 技术周会周报催填脚本
 每周一 11:00 运行：读取知识库最新周报，@ 未填写的人
 """
+import argparse
 import http.client
 import json
 import os
 import re
+import sys
 import urllib.request
 from datetime import date, datetime
+
+from job_lock import acquire_job_lock, release_job_lock
 
 import yaml
 
 CONFIG_PATH = os.path.expanduser("~/.hermes/config.yaml")
 WIKI_PARENT_NODE = "AAGlw95lZi4sUqk78vzc7mkHnIb"
-NOTIFY_GROUP = "oc_611b7861968a34f8c2f538f67410b629"  # 研发运维群
+OPS_GROUP = "oc_611b7861968a34f8c2f538f67410b629"  # 研发运维群
+
+
+def log(message: str) -> None:
+    print(message, file=sys.stderr)
+
+
+def notify_chat_id(notify_chat: str = "") -> str:
+    return notify_chat.strip() or OPS_GROUP
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--notify-chat", default="")
+    return parser.parse_args(argv)
 WIKI_BASE = "https://ta1mz8n1mps.feishu.cn/wiki"
 # 模板提示整行出现时不算已填写。用户自己写的「无」仍然算已填写。
 PLACEHOLDER_LINES = {
@@ -424,49 +442,48 @@ def find_latest_doc(token, today=None):
             record = load_weekly_report(token, doc_day, index, item)
         except Exception as exc:
             errors.append(f"{title}: {exc}")
-            print(f"  Skip unreadable: {title}: {exc}")
+            log(f"  Skip unreadable: {title}: {exc}")
             continue
         loaded.append(record)
-        print(f"  Candidate {title}: filled {record['filled_count']}")
+        log(f"  Candidate {title}: filled {record['filled_count']}")
     if not loaded:
         detail = "; ".join(errors) if errors else "no readable document"
         raise Exception(f"最近 7 天内的周报都无法读取，停止催填: {detail}")
     chosen = pick_weekly_report(loaded)
     if len(loaded) > 1:
-        print(
+        log(
             f"  Using {chosen['item'].get('title')} "
             f"(filled {chosen['filled_count']} of {len(loaded)} docs in the last 7 days)"
         )
     return chosen["item"], chosen["content"], chosen["people"]
 
 
-def main():
+def run_reminder(notify_chat: str = "") -> None:
     if date.today().isoformat() in CHINA_HOLIDAYS:
         print("SKIP|今天是法定节假日，不发送催填消息")
         return
 
     token = get_token()
-    print("[1/4] Locating this week's report...")
+    log("[1/4] Locating this week's report...")
     item, _content, people = find_latest_doc(token)
     doc_title = item.get("title", "")
     doc_url = f"{WIKI_BASE}/{item['node_token']}"
-    print(f"  Title: {doc_title}")
-    print(f"  Date: {extract_date_from_title(doc_title)}")
-    print(f"  URL: {doc_url}")
+    log(f"  Title: {doc_title}")
+    log(f"  Date: {extract_date_from_title(doc_title)}")
+    log(f"  URL: {doc_url}")
 
-    print("[2/4] Reading mentions and fill status...")
+    log("[2/4] Reading mentions and fill status...")
     filled = [(uid, name) for uid, name, is_filled in people if is_filled]
     unfilled = [(uid, name) for uid, name, is_filled in people if not is_filled]
 
-    print(f"  Filled ({len(filled)}): {', '.join(n for _, n in filled)}")
-    print(f"  Unfilled ({len(unfilled)}): {', '.join(n for _, n in unfilled)}")
+    log(f"  Filled ({len(filled)}): {', '.join(n for _, n in filled)}")
+    log(f"  Unfilled ({len(unfilled)}): {', '.join(n for _, n in unfilled)}")
 
     if not unfilled:
-        print("[3/4] Everyone filled, skip notify")
-        print("[4/4] Done")
+        print("本周周报都已填写，没有发送催填")
         return
 
-    print("[3/4] Sending reminder...")
+    log("[3/4] Sending reminder...")
     at_tags = "".join(f'<at user_id="{uid}">{name}</at>' for uid, name in unfilled)
     filled_names = ", ".join(n for _, n in filled) or "无"
     message_text = (
@@ -481,15 +498,29 @@ def main():
         "POST",
         "/open-apis/im/v1/messages?receive_id_type=chat_id",
         {
-            "receive_id": NOTIFY_GROUP,
+            "receive_id": notify_chat_id(notify_chat),
             "msg_type": "text",
             "content": json.dumps({"text": message_text}),
         },
     )
     if resp.get("code") != 0:
-        raise Exception(f"Send reminder failed: {resp}")
-    print(f"  Message id: {resp['data']['message_id']}")
-    print("[4/4] Done")
+        log(f"Send reminder failed: code={resp.get('code')} msg={resp.get('msg')}")
+        print("催填消息发送失败，通知没有改发到其他群。")
+        sys.exit(1)
+    log(f"  Message id: {resp['data']['message_id']}")
+    print(f"已催填{len(unfilled)}人")
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
+    lock = acquire_job_lock("weekly_report_reminder")
+    if lock is None:
+        print("SKIP|上一次催填还在执行，本次没有再跑")
+        return
+    try:
+        run_reminder(args.notify_chat)
+    finally:
+        release_job_lock(lock)
 
 
 if __name__ == "__main__":
