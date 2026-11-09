@@ -96,22 +96,13 @@ token = resp["tenant_access_token"]
 
 ### ⚠️ Cron Job Deliver Target vs Manual API Consistency (🆕 2026-11-09)
 
-When a cron job has a native `deliver` target (e.g., `deliver: "feishu:oc_611b7861968a34f8c2f538f67410b629"`), the system **automatically delivers** the agent's final response to that target using properly resolved credentials. The cron prompt should **NOT** also contain manual Feishu API calls with hardcoded `app_secret`.
+任务 `3d76e07923f4`（技术周会文档复制）的执行汇总和周报正文必须分开。调度器会把 Agent 的最终回复投到 `deliver`。
 
-**Observed inconsistency in job 3d76e07923f4**:
-- `deliver`: `feishu:oc_611b7861968a34f8c2f538f67410b629` (研发运维群)
-- Prompt manually calls Feishu API with hardcoded `app_secret` to send to `oc_8b8978c0510660ec4da3c52ebc7bb9a3` (test群)
-- Result: two different targets, hardcoded credentials in prompt, credential leak risk
+- `deliver`：`feishu:oc_8b8978c0510660ec4da3c52ebc7bb9a3`（test 群）。执行汇总只进这个群。
+- prompt：只运行 `/root/.hermes/scripts/weekly_tech_meeting.py`，不要加参数，不要调用飞书 API 或 `send_message`，不要复述「技术周会文档已创建，请大家填写本周周报」。最终回复只写执行汇总。
+- 周报正文由该脚本发到研发运维群 `oc_611b7861968a34f8c2f538f67410b629`。
 
-**Rule**: If a cron job's `deliver` already targets the correct Feishu group, the prompt should produce output as its final response and let the system handle delivery. Only include manual API calls in the prompt when:
-1. The `deliver` target is `origin` or `local` (not a Feishu group)
-2. You need to send to a **different** group than the deliver target
-3. The deliver mechanism is broken and manual API is the only fallback
-
-**Audit checklist for cron jobs with Feishu deliver**:
-- [ ] `deliver` target chat_id matches the chat_id used in any manual API calls in the prompt
-- [ ] No hardcoded `app_secret` in the prompt (use `send_message` tool or rely on native deliver)
-- [ ] If `deliver` is `feishu:oc_xxx`, prefer native deliver over manual API
+不要把 `deliver` 改回研发运维群，不要在 prompt 里手工发飞书消息，也不要写入 `app_secret`。
 
 ---
 

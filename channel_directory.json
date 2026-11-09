@@ -45,6 +45,12 @@
         "thread_id": null
       },
       {
+        "id": "oc_50ea09c95c2dbc4f5464fc340f797ba8",
+        "name": "数据分析",
+        "type": "group",
+        "thread_id": null
+      },
+      {
         "id": "oc_86e032cc46409db6151b7b2101cb2858:om_x100b646b51a834a0b2918222f69ad81",
         "name": "oc_86e032cc46409db6151b7b2101cb2858 / topic om_x100b646b51a834a0b2918222f69ad81",
         "type": "dm",

@@ -238,14 +238,13 @@ else:
     if token:
         # Send
         send_url = "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id"
-    body = {
-        "receive_id": "oc_8b8978c0510660ec4da3c52ebc7bb9a3",
-        "msg_type": "text",
-        "content": json.dumps({"text": msg})
-    }
-    req = urllib.request.Request(send_url, json.dumps(body).encode(),
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"})
-    
+        body = {
+            "receive_id": "oc_8b8978c0510660ec4da3c52ebc7bb9a3",
+            "msg_type": "text",
+            "content": json.dumps({"text": msg})
+        }
+        req = urllib.request.Request(send_url, json.dumps(body).encode(),
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"})
         try:
             resp = json.loads(urllib.request.urlopen(req, context=ctx).read())
             print(f"\n📤 Send result: {json.dumps(resp, ensure_ascii=False)}")

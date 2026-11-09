@@ -489,6 +489,10 @@ Key rules:
 - **Batch size 50**, no sleep needed between requests. Write ALL batches to `{doc_id}/blocks/{doc_id}/children` (no position param).
 - See `scripts/docx-clone.py` for the complete working script
 
+## 技术周会文档创建
+
+只运行仓库脚本 `scripts/weekly_tech_meeting.py`。不要运行本技能目录里的脚本，也不要另写一份。周报正文「技术周会文档已创建，请大家填写本周周报」由该脚本发到研发运维群。
+
 ## Checking Who Filled Content (e.g., Weekly Reports)
 
 When the task is to determine which `@mention_user` sections have content (e.g., weekly report check), **use `raw_content` API, NOT blocks API**.
