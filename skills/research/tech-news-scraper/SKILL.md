@@ -261,6 +261,18 @@ TechCrunch RSS `<description>` content is inconsistent — sometimes it returns 
 
 ### News Digest to Feishu
 
+**Preferred execution**: Use `execute_code` to run RSS fetching and Feishu delivery scripts. The `execute_code` sandbox handles file creation automatically (scripts run from `/tmp/hermes_sandbox_*/script.py`), avoiding both security scan issues and missing-file problems. Always use `execute_code` over `terminal()` for these workflows.
+
+**Delivery**: Always try the `send_message` tool first when Feishu credentials are configured — it handles token management, retries, and error handling automatically:
+```
+send_message(action='send', target='feishu:oc_xxx', message='消息内容')
+```
+Only fall back to manual Feishu API calls (below) when `send_message` is unavailable or credentials are broken.
+
+**Credential requirement**: All Feishu delivery methods require `FEISHU_APP_SECRET` to be set in `~/.hermes/.env`. If the config.yaml contains `${FEISHU_APP_SECRET}` (unresolved placeholder), API calls will fail with code 10014. See the `feishu-open-api` skill for credential resolution.
+
+**Finding chat IDs**: Known Feishu groups are listed in `~/.hermes/channel_directory.json` under `platforms.feishu` array. Read this file to find the correct `oc_xxx` chat_id for group messages.
+
 ### Cron Job Unicode Pitfall (⚠️ 重要)
 **Inline Python heredocs with Chinese characters trigger the `tirith:confusable_text` security scan** and will be blocked. When running news digest scripts as cron jobs that compose Chinese messages, **always write the script to a file first, then execute it** (which is what `execute_code` does automatically — its scripts go to `/tmp/hermes_sandbox_*/script.py`):
 ```python
@@ -278,11 +290,24 @@ platforms:
   feishu:
     extra:
       app_id: cli_xxx
-      app_secret: xxx
+      app_secret: xxx  # May be ${FEISHU_APP_SECRET} placeholder — requires ~/.hermes/.env
 
 # Top-level key (also in config.yaml):
 FEISHU_HOME_CHANNEL: oc_xxx
 ```
+
+### Diagnostic: Check If Feishu Credentials Are Resolved
+If Feishu API returns `code: 10014, msg: app secret invalid`, the `app_secret` is likely an unresolved placeholder. Diagnose with:
+```python
+import yaml
+with open('/root/.hermes/config.yaml') as f:
+    config = yaml.safe_load(f)
+secret = config['platforms']['feishu']['extra']['app_secret']
+if secret.startswith('$'):
+    print(f"UNRESOLVED: {secret}")
+    print("Add FEISHU_APP_SECRET=actual_value to ~/.hermes/.env")
+```
+Also check gateway logs: `journalctl -u hermes-gateway.service | grep 'app secret invalid'` — this confirms whether the running gateway has the same credential issue.
 
 ### Reading Chat ID from Config
 ```python

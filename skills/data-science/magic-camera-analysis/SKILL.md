@@ -380,6 +380,91 @@ ORDER BY ccr.id DESC LIMIT {n}
 - 同一 batch 的 robot_id 集中出现
 - 已下架模板（status=0）仍有大量请求 → 客户端缓存问题
 
+### 服务端 SLS 日志分析（ling-server + lingos-dify）
+
+当需要分析魔法相机服务端失败根因（非客户端打点）时，使用以下方法：
+
+**数据来源**：
+- **项目**：`leap-online`
+- **Logstore**：`ling-server`（ling-smart 业务日志）、`lingos-dify`（Dify工作流日志）、`ling-smart`（ling-smart 应用日志）
+- **AKSK 凭证 ID**：`sls服务端和客户端日志`
+
+**分析维度**：
+
+#### 1. 魔法相机发起量统计（ling-server）
+```
+关键词: logger: app.service.ai_camera and 开始调用 Dify
+用途: 统计实际调用 Dify 的次数（比客户端打点更接近服务端真实量）
+```
+
+#### 2. 内容风控拦截（ling-server）
+```
+关键词: ai_camera and 图片未通过风控
+用途: 统计服务端内容风控拦截量，可按日分组
+```
+
+#### 3. Dify 错误根因分析（lingos-dify）
+```
+关键词: level: ERROR
+常见错误类型：
+- "HTTPSConnectionPool(host='dashscope.aliyuncs.com', port=443): Read timed out. (read timeout=300)"
+  → DashScope 接口超时，300s 超时
+  → 伴随日志: "qwen_image_edit sync_call exception"
+  → 每次超时会同时产生2条日志（http_request.py:500 + qwen_image_edit.py:88）
+  → 实际超时事件数 = DashScope超时日志数 / 2
+
+- "Request Has Reached API Limit" (50429)
+  → 火山引擎 API 限流
+  → 无退避重试机制导致
+
+- "Text Risk Not Pass" (50412)
+  → 火山引擎内容风控拦截
+
+Analytical SQL 示例（按错误类型分组）：
+level: ERROR | SELECT count(1) as cnt, substr(content, 1, 200) as msg_sample GROUP BY msg_sample ORDER BY cnt DESC LIMIT 10
+
+逐日分布：
+level: ERROR | SELECT count(1) as cnt, date_format(from_unixtime(__time__ + 28800), '%m-%d') as day GROUP BY day ORDER BY day
+```
+
+#### 4. 已知错误量级参考（2026-10-21 ~ 10-30 实测）
+| 错误类型 | 日均量 | 说明 |
+|----------|--------|------|
+| DashScope 300s 超时 | ~56 次/天 | 10/28 爆发至 ~200 次 |
+| 火山 50429 限流 | ~21 次/天 | 无退避重试 |
+| 火山 50412 风控 | ~88 次/天 | Text Risk Not Pass |
+| 服务端风控拦截 | ~50 次/天 | 图片未通过风控 |
+
+#### 5. 调用方式
+```python
+from rds_security_plugin.daemon_client import DaemonClient
+client = DaemonClient()
+client.ensure_daemon_running()
+client.send_request({"action": "register_caller"}, timeout_s=5)
+
+# GetHistograms - 按时间分布
+result = client.execute_aliyun_api(
+    ak_id="sls服务端和客户端日志", product="sls", api_action="GetHistograms",
+    params={"project": "leap-online", "logstore": "lingos-dify",
+            "query": "level: ERROR", "from": str(from_ts), "to": str(to_ts)},
+    region="cn-shanghai"
+)
+
+# GetLogs - analytical SQL
+result = client.execute_aliyun_api(
+    ak_id="sls服务端和客户端日志", product="sls", api_action="GetLogs",
+    params={"project": "leap-online", "logstore": "lingos-dify",
+            "query": "level: ERROR | SELECT count(1) as cnt GROUP BY msg_sample",
+            "from": str(from_ts), "to": str(to_ts), "line": "20"},
+    region="cn-shanghai"
+)
+```
+
+**⚠️ 注意**：daemon PID 注册可能在多次调用间丢失，建议在批量查询前重新调用 `ensure_daemon_running()` + `register_caller`。如果报 "Unauthorized: caller PID not registered"，重启 daemon 并重试。
+
+#### 6. 告警区分
+ling-smart 的 `BizException` / `loktong` 告警与魔法相机无关，属于路通语音卡余量同步的代码 bug（`BizException.throw_200_error` 方法不存在）。排查时需区分。
+
 ### SLS 与数据库数据对比
 - SLS `AICreationGenerationStart`(creation_type=3) = 客户端发起魔法相机创建请求的总次数
 - 数据库 `child_custom_role_task WHERE type=2 AND date='xxx'` = 实际入库的任务记录

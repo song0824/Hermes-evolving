@@ -166,7 +166,7 @@ hermes sessions stats       Session store statistics
 
 ### Cron Jobs
 
-```
+```bash
 hermes cron list            List jobs (--all for disabled)
 hermes cron create SCHED    Create: '30m', 'every 2h', '0 9 * * *'
 hermes cron edit ID         Edit schedule, prompt, delivery
@@ -175,6 +175,8 @@ hermes cron run ID          Trigger on next tick
 hermes cron remove ID       Delete a job
 hermes cron status          Scheduler status
 ```
+
+**Note**: `cronjob(action='list')` only returns truncated `prompt_preview`. To inspect a job's full prompt or audit deliver target consistency, see `references/cron-job-inspection.md`.
 
 ### Webhooks
 
@@ -603,6 +605,7 @@ hermes config set auxiliary.vision.model <model_name>
 | MCP servers | `hermes mcp list` or [MCP guide](https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp) |
 | Profiles | `hermes profile list` or [Profiles docs](https://hermes-agent.nousresearch.com/docs/user-guide/profiles) |
 | Cron jobs | `hermes cron list` or [Cron docs](https://hermes-agent.nousresearch.com/docs/user-guide/features/cron) |
+| Cron prompt inspection | `references/cron-job-inspection.md` (full prompt extraction, audit patterns) |
 | Memory | `hermes memory status` or [Memory docs](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory) |
 | Env variables | `hermes config env-path` or [Env vars reference](https://hermes-agent.nousresearch.com/docs/reference/environment-variables) |
 | CLI commands | `hermes --help` or [CLI reference](https://hermes-agent.nousresearch.com/docs/reference/cli-commands) |

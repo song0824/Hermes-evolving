@@ -188,7 +188,11 @@ else:
     ctx = ssl.create_default_context()
     resp_data = json.loads(urllib.request.urlopen(req, context=ctx).read())
     token = resp_data.get("tenant_access_token")
-    print(f"\n🔑 Token obtained: {token[:20]}...")
+    if not token:
+        print(f"\n❌ Token获取失败: {resp_data}")
+        token = None
+    else:
+        print(f"\n🔑 Token obtained: {token[:20]}...")
 
     today = datetime.now().strftime('%Y-%m-%d')
     
@@ -231,8 +235,9 @@ else:
     print(f"\n📝 Message length: {len(msg)} chars")
     print(f"📝 Message preview:\n{msg[:300]}...")
 
-    # Send
-    send_url = "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id"
+    if token:
+        # Send
+        send_url = "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id"
     body = {
         "receive_id": "oc_8b8978c0510660ec4da3c52ebc7bb9a3",
         "msg_type": "text",
@@ -241,11 +246,13 @@ else:
     req = urllib.request.Request(send_url, json.dumps(body).encode(),
         headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"})
     
-    try:
-        resp = json.loads(urllib.request.urlopen(req, context=ctx).read())
-        print(f"\n📤 Send result: {json.dumps(resp, ensure_ascii=False)}")
-    except Exception as e:
-        print(f"\n❌ Send failed: {e}")
+        try:
+            resp = json.loads(urllib.request.urlopen(req, context=ctx).read())
+            print(f"\n📤 Send result: {json.dumps(resp, ensure_ascii=False)}")
+        except Exception as e:
+            print(f"\n❌ Send failed: {e}")
+    else:
+        print("\n⚠️ 跳过发送 - token获取失败")
 
 # ── Output final report ──
 print("\n" + "=" * 60)

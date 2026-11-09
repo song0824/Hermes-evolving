@@ -140,6 +140,17 @@ When composing Chinese summaries from English titles, use these patterns:
 | Datacenter/infrastructure | "数据中心/算力：{核心内容}" |
 | Funding/IPO | "融资/上市：{核心内容}" |
 
+## Feishu Delivery — Preferred Method
+
+**Always try `send_message` tool first** when Feishu credentials are properly configured:
+```
+send_message(action='send', target='feishu:oc_xxx', message='消息内容')
+```
+This handles token management, retries, and error handling automatically.
+
+**Fallback: Manual Feishu API** (only when `send_message` is unavailable or credentials are broken):
+See the "Sending to Feishu Group" section in the main SKILL.md for manual API calls.
+
 ## Feishu Message Format Template
 
 ```

@@ -29,6 +29,90 @@ token = json.loads(urllib.request.urlopen(req).read())["tenant_access_token"]
 
 **Token expires in ~2 hours** — fetch fresh each time.
 
+### ⚠️ Env Var Placeholder Resolution (Credential Gotcha)
+
+`config.yaml` stores `app_secret` as a shell-style placeholder like `${FEISHU_APP_SECRET}` — it does NOT auto-resolve. The actual value must be set in `~/.hermes/.env`:
+
+```
+FEISHU_APP_SECRET=your_actual_secret_here
+```
+
+**Symptoms of missing resolution:**
+- Auth API returns `{"code": 10014, "msg": "app secret invalid"}` — the literal string `${FEISHU_APP_SECRET}` was sent as the secret.
+- Gateway logs show `[Lark] connect failed, err: 1000040345: app_id or app_secret is invalid`
+- `python -c "import yaml; ..."` yields `app_secret: ${FEISHU_APP_SECRET}` (unresolved)
+
+**Diagnosis:**
+```python
+import yaml
+with open('/root/.hermes/config.yaml') as f:
+    config = yaml.safe_load(f)
+app_secret = config['platforms']['feishu']['extra']['app_secret']
+if app_secret.startswith('$'):
+    print(f"⚠️ Placeholder unresolved: {app_secret}")
+    print("  Check ~/.hermes/.env for FEISHU_APP_SECRET")
+    print("  Or run: hermes setup (re-enter Feishu credentials)")
+```
+
+**Fix:** Add `FEISHU_APP_SECRET=your_secret` to `~/.hermes/.env`, or run `hermes setup` to re-enter Feishu credentials (which calls `save_env_value`). After updating `.env`, restart the gateway: `systemctl restart hermes-gateway.service`.
+
+**⚠️ Cron job caveat:** Cron-run sessions inherit a minimal environment. If `FEISHU_APP_SECRET` is only in the user's shell profile (`.bashrc`/`.zshrc`) but not in `~/.hermes/.env`, cron jobs will also fail. Always store secrets in `~/.hermes/.env`, not shell profiles.
+
+### ✅ Cron-Safe Authentication Snippet (Copy-Paste Ready)
+
+When writing Python scripts that call Feishu APIs in cron jobs, you MUST load the dotenv before reading config.yaml:
+
+```python
+import os, urllib.request, json, re
+
+# Step 1: Load .env to populate os.environ
+from dotenv import load_dotenv
+load_dotenv(os.path.expanduser('~/.hermes/.env'), override=True)
+
+# Step 2: Read config and expand ${VAR} placeholders
+import yaml
+with open(os.path.expanduser('~/.hermes/config.yaml')) as f:
+    config = yaml.safe_load(f)
+
+def expand_env_vars(val):
+    if isinstance(val, str) and '${' in val:
+        return re.sub(r'\$\{([^}]+)\}', lambda m: os.environ.get(m.group(1), m.group(0)), val)
+    return val
+
+app_id = expand_env_vars(config['platforms']['feishu']['extra']['app_id'])
+app_secret = expand_env_vars(config['platforms']['feishu']['extra']['app_secret'])
+
+# Step 3: Get token
+url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
+req = urllib.request.Request(url, json.dumps({"app_id": app_id, "app_secret": app_secret}).encode(),
+                             headers={"Content-Type": "application/json"})
+resp = json.loads(urllib.request.urlopen(req).read())
+if resp.get("code") != 0:
+    raise RuntimeError(f"Feishu auth failed: {resp}")
+token = resp["tenant_access_token"]
+```
+
+**Pro-tip: Use `hermes config show` instead of raw YAML parsing.** The `hermes config show` CLI command already has resolved values. You can parse its output or use `hermes config set` to verify credentials without touching the placeholder resolution yourself.
+
+### ⚠️ Cron Job Deliver Target vs Manual API Consistency (🆕 2026-11-09)
+
+When a cron job has a native `deliver` target (e.g., `deliver: "feishu:oc_611b7861968a34f8c2f538f67410b629"`), the system **automatically delivers** the agent's final response to that target using properly resolved credentials. The cron prompt should **NOT** also contain manual Feishu API calls with hardcoded `app_secret`.
+
+**Observed inconsistency in job 3d76e07923f4**:
+- `deliver`: `feishu:oc_611b7861968a34f8c2f538f67410b629` (研发运维群)
+- Prompt manually calls Feishu API with hardcoded `app_secret` to send to `oc_8b8978c0510660ec4da3c52ebc7bb9a3` (test群)
+- Result: two different targets, hardcoded credentials in prompt, credential leak risk
+
+**Rule**: If a cron job's `deliver` already targets the correct Feishu group, the prompt should produce output as its final response and let the system handle delivery. Only include manual API calls in the prompt when:
+1. The `deliver` target is `origin` or `local` (not a Feishu group)
+2. You need to send to a **different** group than the deliver target
+3. The deliver mechanism is broken and manual API is the only fallback
+
+**Audit checklist for cron jobs with Feishu deliver**:
+- [ ] `deliver` target chat_id matches the chat_id used in any manual API calls in the prompt
+- [ ] No hardcoded `app_secret` in the prompt (use `send_message` tool or rely on native deliver)
+- [ ] If `deliver` is `feishu:oc_xxx`, prefer native deliver over manual API
+
 ---
 
 ## Section 1: IM Messaging (from feishu-im-messaging)
@@ -390,3 +474,4 @@ result = subprocess.run(['grep', '-n', 'reply_mode', '~/.hermes/hermes-agent/gat
 |---------|---------|
 | Alert source group | `oc_1876881e2b07f5b3b4ecc29189ae8217` |
 | Report target group | `oc_611b7861968a34f8c2f538f67410b629` |
+| AI硬件日报群 | `oc_8b8978c0510660ec4da3c52ebc7bb9a3` |

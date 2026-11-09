@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-11-02T11:09:58.619440",
+  "updated_at": "2026-11-09T11:48:23.140974",
   "platforms": {
     "telegram": [],
     "discord": [],
@@ -21,18 +21,6 @@
         "thread_id": null
       },
       {
-        "id": "oc_611b7861968a34f8c2f538f67410b629",
-        "name": "⬆️研发运维(周五不发版🔪🔪🔪)",
-        "type": "group",
-        "thread_id": null
-      },
-      {
-        "id": "oc_50ea09c95c2dbc4f5464fc340f797ba8",
-        "name": "数据分析",
-        "type": "group",
-        "thread_id": null
-      },
-      {
         "id": "oc_86e032cc46409db6151b7b2101cb2858:om_x100b678f1cd09918b2e71a07895b4b1",
         "name": "oc_86e032cc46409db6151b7b2101cb2858 / topic om_x100b678f1cd09918b2e71a07895b4b1",
         "type": "dm",
@@ -49,6 +37,12 @@
         "name": "oc_86e032cc46409db6151b7b2101cb2858 / topic om_x100b65039e3ba0a4b12cf8c0ace6890",
         "type": "dm",
         "thread_id": "om_x100b65039e3ba0a4b12cf8c0ace6890"
+      },
+      {
+        "id": "oc_611b7861968a34f8c2f538f67410b629",
+        "name": "⬆️研发运维(周五不发版🔪🔪🔪)",
+        "type": "group",
+        "thread_id": null
       },
       {
         "id": "oc_86e032cc46409db6151b7b2101cb2858:om_x100b646b51a834a0b2918222f69ad81",
@@ -91,6 +85,12 @@
         "name": "test / topic om_x100b61730a8558b0b0bbf2e8543b620",
         "type": "group",
         "thread_id": "om_x100b61730a8558b0b0bbf2e8543b620"
+      },
+      {
+        "id": "oc_611b7861968a34f8c2f538f67410b629:om_x100b61b77ac32530c4ebf5b34841322",
+        "name": "⬆️研发运维(周五不发版🔪🔪🔪) / topic om_x100b61b77ac32530c4ebf5b34841322",
+        "type": "group",
+        "thread_id": "om_x100b61b77ac32530c4ebf5b34841322"
       }
     ],
     "wecom": [],

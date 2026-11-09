@@ -20,9 +20,27 @@ trigger: User wants to query cloud logs, SLS, Log Service, error logs, access lo
 - **Image**: `registry-vpc.cn-shanghai.aliyuncs.com/leap-online/ling-server:production-<build>-v<version>`
 - **Log path**: `/code/logs/ling_server.log`
 
-## ⚠️ Tool Availability Constraint (Critical)
+## Preferred Tool: `aliyun_api` (Direct)
 
-**`aliyun_api`, `list_aksk_credentials`, and `rds_security` tools are ONLY available in the gateway agent loop.** They are Hermes plugin tools registered via `PluginContext.register_tool()` and only function when Hermes runs as the interactive agent (gateway mode).
+**`aliyun_api` works directly for SLS queries when running as the gateway agent.** No daemon restart needed.
+
+```json
+{
+  "product": "sls",
+  "action": "GetHistograms",
+  "params": { "project": "leap-online", "logstore": "ling-server", "query": "level: ERROR", "from": "...", "to": "...", "region": "cn-shanghai" },
+  "ak_id": "sls服务端和客户端日志",
+  "region": "cn-shanghai"
+}
+```
+
+**Actions**: `GetHistograms`, `GetLogs` both work. `GetLogs` returns raw log entries; `GetHistograms` returns time-bucket counts.
+
+**Caveat**: `aliyun_api` may intermittently fail with `Unauthorized: caller PID not registered` between calls. When this happens, fall back to the daemon restart workaround below, or retry the call after re-registering.
+
+## Tool Availability Constraint (Critical)
+
+**`aliyun_api`, `list_aksk_credentials`, and `rds_security` tools are ONLY available in the gateway agent loop.**
 
 They are **NOT available** in:
 - CLI mode (`hermes -z "..."`) — tools silently ignored
@@ -396,11 +414,17 @@ Common tag fields: `__tag__:_pod_name_`, `__tag__:_node_name_`, `__tag__:_node_i
 - **Pitfall**: If you get `syntax error, unexpected TERM, error near < fieldname >`, the field is not indexed. Fall back to keyword search: `level: ERROR and keyword`
 - **⚠️ Chinese keyword pitfall**: SLS query syntax via API does NOT reliably support Chinese characters in search queries. **Verified 2026-05-30**:
   - ✅ **Works**: `角色不存在` (136→68 matches SQL), `孩子不属于你` (138→69), short common phrases
-  - ❌ **Fails (returns 0)**: `魔法正在施展中`, `签名验证异常`, `辩论`, `Cannot connect to host ling-smart`, `No response returned`, `ling-smart-svc`
+  - ❌ **Fails (returns 0)**: `魔法正在施展中`, `签名验证异常`, `辩论`, `Cannot connect to host ling-smart`, `No response returned`, `ling-smart-svc`, `超时`, `处理超时`
   - ✅ **Works**: `Dify`, `WALLPAPER_ERROR`, `Internal Server Error` (English technical terms)
   - ✅ **Works with caveat (inflated counts)**: `角色不存在` (GetHistograms returns ~2x SQL count), `孩子不属于你` (~2x), `WALLPAPER_ERROR` (~3x due to correlated logs)
   - **Rule**: English technical terms (Dify, WALLPAPER_ERROR, Internal Server Error) and very short Chinese phrases are more reliable. Long Chinese sentences, service names, and phrases with special characters almost always return 0.
-  - **Workaround**: Use `GetHistograms` with only ASCII keywords for `level: ERROR`, then use `GetLogs` on narrow time windows with analytical SQL (`| SELECT count(1), substr(message, 1, 200) GROUP BY msg_sample`) for message-level classification.
+  - **Workaround 1**: Use `GetHistograms` with only ASCII keywords for `level: ERROR`, then use `GetLogs` on narrow time windows with analytical SQL (`| SELECT count(1), substr(message, 1, 200) GROUP BY msg_sample`) for message-level classification.
+  - **Workaround 2 (verified 2026-11-03)**: Use `GetLogs` with `powerSql: "true"` and `CASE WHEN ... LIKE` analytical SQL for Chinese error classification across full time ranges. This reliably classifies errors by Chinese message patterns even when GetHistograms returns 0:
+    ```
+    家庭分析师 and level: ERROR | SELECT count(1) as cnt, case when message like '%Dify Agent%' then 'Dify Agent 运行失败' when message like '%超时%' then '处理超时已丢弃' else '其他' end as error_type GROUP BY error_type ORDER BY cnt DESC
+    ```
+    Add `date_format(from_unixtime(__time__ + 28800), '%m-%d') as day` to `GROUP BY` for per-day breakdown.
+  - **⚠️ Python exception/traceback keywords NOT findable via GetHistograms (verified 2026-11-04)**: Specific Python error messages like `AgnosticBaseCursor`, `to_list()`, `missing 1 required positional argument`, `length` return **0 results** in `GetHistograms` even when the exact errors are clearly present in the logstore and visible via analytical SQL. This applies to full Python exception messages, class names, and traceback fragments. **Confirmed**: `GetHistograms` with `AgnosticBaseCursor` → 0, `to_list` → 0, `missing 1 required` → 0 — but analytical SQL `level: ERROR | SELECT count(1), substr(message, 1, 200) GROUP BY msg_sample` revealed 27,923 matching entries. **Root cause**: These long technical messages are not indexed as full-text searchable tokens by SLS, or the tokenizer splits them in ways that keyword search cannot reconstruct. **Fix**: When alert messages contain specific Python exceptions/tracebacks, skip GetHistograms keyword search entirely. Go straight to analytical SQL (`level: ERROR | SELECT count(1) as cnt, substr(message, 1, 200) as msg_sample GROUP BY msg_sample ORDER BY cnt DESC`) for error classification.
 
 ## Common Queries
 - **All Errors**: `query="level: ERROR"`
@@ -689,6 +713,7 @@ for keyword in ["下载图片失败", "封面生成失败", "视频转换失败"
 
 ## ling-smart Known Error Patterns
 
+- **家庭分析师 Dify Agent 失败/超时（🆕 2026-11-03 → 🔴 持续复现）**：`logger: app.service.schedule_weapp_sammary_tags`，每天 00:00 CST 定时批量任务触发，单次批次处理 ~44~45万 child_id。错误分三类：(1) `Dify Agent 运行失败: child_id=XXXXX`（~62%，Dify 工作流调用异常）；(2) `处理超时已丢弃: worker=N, child_id=XXXXX, timeout=160s`（~38%，20个并发 worker 中某个超时）；(3) **🔴 `AgnosticBaseCursor.to_list() missing 1 required positional argument: 'length'`（🆕 2026-11-04 凌晨爆发 111,564 条/小时）** — MongoDB Beanie ORM 的 `to_list()` 调用缺少必填 `length` 参数，出现在 `schedule_weapp_sammary_tags.py` 第 593 行 `child_recent_watched()` → 第 1183 行 `run_dify_process()`，导致所有孩子数据处理全部失败。3天趋势（不含 ORM 错误）：10-31:22条 → 11-01:39条 → 11-02:43条 → 11-03:23条。失败率约万分之一（0.0095%），成功率 99.99%+（不含 ORM 错误日）。**根因**：部分 child_id 的 Dify Agent 调用失败或处理超时；ORM 错误为代码变更引入的兼容性 bug。**排查命令**：`ling-smart and 家庭分析师 and level: ERROR`；或 analytical SQL `level: ERROR | SELECT count(1), substr(message, 1, 200) GROUP BY msg_sample`。**建议**：排查 Dify 工作流稳定性；修复 `to_list()` 缺 `length` 参数；考虑增加 160s timeout 或优化 worker 并发策略。
 - **网易云 Token 定时刷新失败（🆕 2026-10-23 → 🔴 持续复现）**：`logger: app.service.schedule_netease_token_refresh`，每天 04:00 CST 触发，错误 `刷新 token 失败 code=1406 message=accessToken过期，请重新授权登录`。**受影响设备**：udid=6A4LK69Y8PZE (auth_id=24) 连续7天失败，udid=NA4LJEG4PPXS (auth_id=1095) 10/25出现1次。**根因**：用户网易云授权 accessToken 过期，refresh_token 无法刷新，需用户重新授权登录。**排查命令**：`ling-smart and level: ERROR and netease`。**建议**：将 code=1406 从 ERROR 降级为 WARN；增加用户侧重新授权提醒；超过 N 天连续失败自动暂停刷新。
 - **MQ 消费未知业务类型（🆕 2026-07-21）**：`logger: root`（非业务 logger），**无 exception traceback**。消息格式：`MQ业务处理 未找到对应业务类型: job_id='...' producer='xxx' type='xxx' attributes=AliMQAttributesModel(...)`。已知未注册类型：`device_listen_audio`（最多，来自 device-api）、`sms_sync`/`data_update`（来自 ling-server）、`device_welcome`、`device_bind_status`、`device_ai_pk`、`riddle_completed`。根因：ling-smart 的 MQ 消费者 type→handler 映射表缺少这些类型，走 default/error 分支。可短时间爆发数万条（11:46-11:49 爆发 30,000+ 条）。
 - **有道 TTS 超时**：`app.service.youdao_tts` / `app.core.youdao`。`Timeout context manager should be used inside a task` + `语音合成异常, 耗时=0.00秒`。根因：aiohttp 调用有道 TTS 时 async/await 上下文使用不当，超时管理器不在任务内执行。
@@ -699,6 +724,7 @@ for keyword in ["下载图片失败", "封面生成失败", "视频转换失败"
 | Error Code | Message | Source Logger | Severity | Notes |
 |---|---|---|---|---|
 | 2001001307 | 获取用户能量失败 | exception_handlers | 🟡 | ling-smart-svc 不可达时触发 |
+| 2001001306 | 未找到对应的设备 | exception_handlers | 🟡 | 🆕 2026-11-06新增，weapp_device_status权限校验失败触发，48条/天集中在单一child_id |
 | 2001001301 | 来电记录不存在 | exception_handlers | 🟢 | 设备端请求不存在的通话记录，业务校验类。可降级为WARN |
 | 2001001312 | TTS转换异常 | audio_generator_scheduler, tts_client | 🔴 | Often linked to specific IPS records |
 | 2001001338 | 魔法正在施展中～请等待之前的魔法完成后再试哦！ | exception_handlers | 🟡 | Rate-limiting for magic/conversation features |

@@ -51,6 +51,26 @@ Three containers write to this logstore across two namespaces:
 - **Deploy-day spike**: 新版本部署当天错误量翻倍（6/19: 9,763, 6/20: 8,735），随后逐步回落到基线 ~4,000
 - **Night baseline**: ~65-70/hour
 
+## Dify 评判 Agent 调用失败链（🆕 2026-11-04 → 🔴 集中爆发）
+
+**错误链路**：
+```
+DifyAgentInvoke 非SSE响应 → GreatUserInputLabelHandler 调用评判 agent 失败 → llm执行失败 → ExecuteScheduleJobExecImpl 任务执行失败
+```
+
+**涉及类**：
+| 类 | 错误消息 | 角色 |
+|---|---|---|
+| `c.l.o.s.core.dify.DifyAgentInvoke` | `dify agent 非SSE响应,uuid:...,body:{"message":"Unhandled Internal Server Error"}` | Dify HTTP 调用层 |
+| `c.l.o.s.c.s.h.GreatUserInputLabelHandler` | `任务:XXXXX,调用评判 agent 失败` / `任务:XXXXX，llm执行失败` | 评判 agent 处理层 |
+| `c.l.o.s.c.s.a.SpecialPrologueGenerateImpl` / `c.l.o.s.c.s.a.ExecuteScheduleJobExecImpl` | `任务执行失败:XXXXX` | 定时任务执行层 |
+
+**根因**：Dify 平台返回 `Unhandled Internal Server Error` 非 SSE 响应，导致 `GreatUserInputLabelHandler` 调用评判 agent 失败，级联触发任务执行失败。异常类型：`SERVER_INTERAL_ERROR:2020000500:服务异常，请稍后再试`。
+
+**排查方向**：检查 Dify 平台服务健康状态及 SSE 接口可用性；确认 Dify 工作流（评判 agent）是否正常运行或过载。
+
+**影响范围**：集中在 `lingos-admin` 容器（`lingos-online-new` 命名空间），涉及用户输入评判任务。
+
 ## Source Class Extraction Technique
 
 When `GROUP BY substr(content)` returns mostly count=1 entries (unique error messages), extract source class from raw logs:
