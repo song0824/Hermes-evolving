@@ -56,6 +56,76 @@ if app_secret.startswith('$'):
 
 **Fix:** Add `FEISHU_APP_SECRET=your_secret` to `~/.hermes/.env`, or run `hermes setup` to re-enter Feishu credentials (which calls `save_env_value`). After updating `.env`, restart the gateway: `systemctl restart hermes-gateway.service`.
 
+### ⚠️ Gateway Caches app_secret at Startup (🆕 2026-11-13)
+
+The gateway process loads `app_id` and `app_secret` **once at startup** and caches them in memory. If you update the secret in `config.yaml` or `.env` while the gateway is running, the gateway **continues using the old cached value**.
+
+**Symptoms:**
+- Gateway logs show `[Feishu] Send error: obtain self tenant access token failed, code: 10014, msg: app secret invalid`
+- But manually reading `config.yaml` and testing the same `app_secret` against the auth API **succeeds** (the config is correct, the gateway just has stale state)
+- Cron job scripts that read `config.yaml` at runtime work fine (they get the fresh value), only gateway send fails
+
+**Diagnosis:**
+```bash
+# 1. Verify the secret is valid right now:
+python3 -c "
+import yaml, json, urllib.request
+with open('/root/.hermes/config.yaml') as f: config = yaml.safe_load(f)
+s = config['platforms']['feishu']['extra']['app_secret']
+resp = json.loads(urllib.request.urlopen(urllib.request.Request(
+    'https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal',
+    json.dumps({'app_id': config['platforms']['feishu']['extra']['app_id'], 'app_secret': s}).encode(),
+    headers={'Content-Type': 'application/json'}
+)).read())
+print(resp)
+"
+# If code=0, the secret is valid — gateway has stale cache.
+
+# 2. Check gateway uptime:
+ps -o pid,etime,cmd -p $(pgrep -f 'gateway run') | head -5
+```
+
+**Fix:** Restart the gateway to reload credentials from config.yaml:
+```bash
+# Option A: kill the process (recommended; systemd auto-restarts via Restart=on-failure)
+kill -TERM $(pgrep -f 'gateway run')
+# Wait ~10s, then verify: ps aux | grep 'gateway run' | grep -v grep
+
+# Option B: hermes CLI (may time out but works asynchronously)
+hermes gateway restart
+
+# Option C: direct kill if systemd is not available (no systemctl --user)
+kill -TERM $(pgrep -f 'gateway run')
+# No systemd needed — the gateway was started with `--replace` flag and exits with code 1,
+# so whatever supervises it (systemd, nohup, etc.) will revive it.
+```
+
+**Verification:** After restart, check gateway logs for `✓ feishu connected` and no `app secret invalid` errors.
+
+**Why cron scripts still work:** Scripts like `weekly_tech_meeting.py` read `config.yaml` fresh on each invocation — they don't use the gateway's cached credentials. This creates the confusing situation where scheduled tasks appear to work but group @mentions get no response.
+
+### 🆘 Emergency Secret Recovery (when `.env` is missing the value)
+
+If `FEISHU_APP_SECRET` is lost from `.env` and you cannot re-run `hermes setup`, check these fallback sources:
+
+1. **Existing cron job prompts**: Other cron jobs that send Feishu messages may have the secret hardcoded in their prompts. Inspect `/root/.hermes/cron/jobs.json` and search for `APP_SECRET` or `app_secret` string literals in job prompt text. Use this working regex to extract the actual value:
+   ```python
+   import json, re
+   with open('/root/.hermes/cron/jobs.json') as f:
+       jobs = json.load(f)['jobs']
+   for job in jobs:
+       prompt = job.get('prompt', '')
+       m = re.search(r'APP_SECRET[=":\s]+([A-Za-z0-9_\-]{20,})', prompt)
+       if m:
+           print(f"Found secret in job '{job.get('name','')}': {m.group(1)}")
+           break  # First match is likely correct
+   ```
+   ⚠️ Secrets in cron prompts may be truncated in display (e.g., `3VO3tD...Blij`) — the regex above matches the full 20+ char alphanumeric string which is the actual secret value, not the truncated display form.
+
+2. **Previous cron job outputs**: Check `/root/.hermes/cron/output/` for past job runs that may have logged the secret or a successful auth response.
+
+3. **Gateway logs**: `journalctl -u hermes-gateway.service` may show the secret in error messages (only if logged before sanitization was added).
+
 **⚠️ Cron job caveat:** Cron-run sessions inherit a minimal environment. If `FEISHU_APP_SECRET` is only in the user's shell profile (`.bashrc`/`.zshrc`) but not in `~/.hermes/.env`, cron jobs will also fail. Always store secrets in `~/.hermes/.env`, not shell profiles.
 
 ### ✅ Cron-Safe Authentication Snippet (Copy-Paste Ready)
@@ -92,7 +162,7 @@ if resp.get("code") != 0:
 token = resp["tenant_access_token"]
 ```
 
-**Pro-tip: Use `hermes config show` instead of raw YAML parsing.** The `hermes config show` CLI command already has resolved values. You can parse its output or use `hermes config set` to verify credentials without touching the placeholder resolution yourself.
+**Pro-tip: `hermes config show` does NOT show Feishu credentials.** The `hermes config show` CLI only displays external API keys (OpenRouter, OpenAI, Exa, etc.) under "API Keys" — Feishu `app_id`/`app_secret` are NOT listed. You MUST read `config.yaml` directly to verify Feishu credentials. Use `hermes config set` to modify Feishu settings, but for verification, parse the YAML directly with `dotenv` + env var expansion.
 
 ### ⚠️ Cron Job Deliver Target vs Manual API Consistency (🆕 2026-11-09)
 
@@ -404,12 +474,13 @@ print('Subscribed callbacks:', cb.get('subscribed_callbacks', []))
 - **If `im.message.receive_v1` NOT in `subscribed_callbacks`** → event subscription not published. Go to 飞书开放平台 → 事件订阅 → add `im.message.receive_v1` → publish new version.
 
 ### Root Causes (in order of likelihood)
-1. **Event subscription not published** → `im.message.receive_v1` missing from `subscribed_callbacks`
-2. **Missing permission** → `im:message.group_at_msg` not enabled in 权限管理
-3. **Bot not in group** → Add bot via group settings. Test with: `POST /im/v1/messages?receive_id_type=chat_id`
-4. **Bot identity not hydrated** → Missing `admin:app.info:readonly` permission. Warning at startup: `Unable to hydrate bot identity`
-5. **Wrong bot @mentioned** → Multiple bots in group, user @mentions wrong one
-6. **Code bug**: `group_policy` in config.yaml is ignored — only reads env var. Fix: patch `gateway/platforms/feishu.py` line ~1116 to read `extra.get("group_policy")`
+1. **Gateway has stale app_secret cache** → Gateway caches credentials at startup. If secret was updated in config.yaml after gateway started, gateway continues using old value. Symptom: `code: 10014 app secret invalid` in gateway logs, but manual auth test succeeds. Fix: `kill -TERM $(pgrep -f 'gateway run')` to restart.
+2. **Event subscription not published** → `im.message.receive_v1` missing from `subscribed_callbacks`
+3. **Missing permission** → `im:message.group_at_msg` not enabled in 权限管理
+4. **Bot not in group** → Add bot via group settings. Test with: `POST /im/v1/messages?receive_id_type=chat_id`
+5. **Bot identity not hydrated** → Missing `admin:app.info:readonly` permission. Warning at startup: `Unable to hydrate bot identity`
+6. **Wrong bot @mentioned** → Multiple bots in group, user @mentions wrong one
+7. **Code bug**: `group_policy` in config.yaml is ignored — only reads env var. Fix: patch `gateway/platforms/feishu.py` line ~1116 to read `extra.get("group_policy")`
 
 ### Hermes Agent Feishu Adapter Configuration Review
 

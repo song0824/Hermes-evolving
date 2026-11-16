@@ -66,3 +66,37 @@ skills/.curator_backups/
 
 # ===== bin (venv binaries) =====
 bin/
+
+# ===== Agent 运行时产物 =====
+lsp/
+auth.json
+channel_directory.json
+models_dev_cache.json
+.skills_prompt_snapshot.json
+screenshot-*.png
+scripts/script.py
+scripts/send_notification.py
+scripts/sls_daily_drilldown.py
+scripts/sls_daily_error.py
+scripts/sls_error_analysis.py
+
+# ===== Skills 运行时资源 =====
+skills/.curator_state
+skills/.usage.json
+skills/*/scripts/
+skills/*/references/
+skills/*/templates/
+skills/*/assets/
+skills/**/scripts/
+skills/**/references/
+skills/**/templates/
+skills/**/assets/
+
+# ===== 其他临时文件 =====
+*.tmp
+*.bak
+~$*
+
+# ===== hermes-agent 源码中的运行时脚本 =====
+hermes-agent/skills/*/scripts/
+hermes-agent/skills/**/scripts/

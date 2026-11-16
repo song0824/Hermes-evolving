@@ -58,7 +58,7 @@ name_map = dict(zip(uids, names))
 {"text_run": {"content": f"@{display_name}"}}
 ```
 
-## 3. Config Credentials Corruption After Git Push (2026-11-02)
+## 3. Config Credentials & Git Push (2026-11-02 / 2026-11-09)
 
 When pushing to GitHub, `config.yaml` had:
 ```yaml
@@ -72,6 +72,12 @@ Instead of real values, causing all Feishu API calls to return `code: 10003, msg
 app_id: cli_a97b1e4633f99cb0
 app_secret: ${FEISHU_APP_SECRET}
 ```
+
+**⚠️ GitHub Secret Scanning (2026-11-09)**: Pushing files with hardcoded `app_secret` values to GitHub triggers GH013 push protection — push is rejected. Replace with `${FEISHU_APP_SECRET}` placeholder before committing. Check `skills/.curator_backups/` too — old cron job JSON backups contain secrets embedded in prompt strings and should be excluded from git entirely (add to `.gitignore`).
+
+**⚠️ Secret Scanning (2026-11-09)**: GitHub's push protection **blocks pushes containing hardcoded Feishu `app_secret`**. If `config.yaml` or any skill file contains the plaintext secret (e.g., `3VO3tDBRDAo7pTCgGZViXg7gOo3OBlij`), the push is rejected with `GH013: Push cannot contain secrets — Lark Application Secret`.
+
+**Rule**: Always use `${FEISHU_APP_SECRET}` placeholder in files that will be committed. Replace with actual value only in `~/.hermes/.env`. Also check `skills/.curator_backups/` — old cron job JSON backups contain secrets in prompt strings and should be excluded from `.gitignore`.
 
 ## 4. Permission Grant Returns 1063003 (Non-blocking)
 

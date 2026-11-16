@@ -22,6 +22,8 @@ HARDWARE_KEYWORDS = [
     'silicon', 'wafer', 'foundry', 'packaging', 'cfet', 'angstrom',
     'nvm', 'non-volatile', 'edge ai', 'on-device', 'ondevice', 'inference',
     'billion', 'funding', 'raise', 'acquisition', 'ipo',
+    # Autonomous driving (2026-11 verified):
+    'self-driving', '自动驾驶', 'autonomous driving',
     # Emerging categories (2026-10 verified):
     'physical ai', 'cosmos', 'isaac', 'jetson', 'nim',  # Nvidia Physical AI stack
     'smart ring', 'wearable ai', 'local-first', 'local first', 'meeting note',  # Edge/wearable AI

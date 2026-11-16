@@ -581,6 +581,8 @@ Common gateway problems:
 ### Platform-specific issues
 - **Discord bot silent**: Must enable **Message Content Intent** in Bot → Privileged Gateway Intents.
 - **Slack bot only works in DMs**: Must subscribe to `message.channels` event. Without it, the bot ignores public channels.
+- **Feishu bot silent / @no response**: Bot receives messages (websocket OK) but cannot reply — check gateway logs for `code: 10014, msg: app secret invalid`. Fix: go to https://open.feishu.cn/app → find the app → "凭证与基础信息" → copy fresh App Secret → update both `hermes config set platforms.feishu.extra.app_secret '<new>'` and `FEISHU_APP_SECRET` in `~/.hermes/.env` → `hermes gateway restart`. The websocket connection stays alive even with a bad secret, so the bot appears online but is silently unable to send.
+- **Feishu credentials updated but still failing after config change**: The gateway process loads `app_secret` at startup and caches it. Even if config.yaml and .env have a valid secret, the running gateway uses the stale one from when it started. Scripts that read config fresh each run will work while the gateway still fails. Always `hermes gateway restart` (or kill + let systemd revive) after changing platform credentials.
 - **Windows HTTP 400 "No models provided"**: Config file encoding issue (BOM). Ensure `config.yaml` is saved as UTF-8 without BOM.
 
 ### Auxiliary models not working
@@ -606,6 +608,8 @@ hermes config set auxiliary.vision.model <model_name>
 | Profiles | `hermes profile list` or [Profiles docs](https://hermes-agent.nousresearch.com/docs/user-guide/profiles) |
 | Cron jobs | `hermes cron list` or [Cron docs](https://hermes-agent.nousresearch.com/docs/user-guide/features/cron) |
 | Cron prompt inspection | `references/cron-job-inspection.md` (full prompt extraction, audit patterns) |
+| Cron job pitfalls | `references/cron-job-pitfalls.md` (dual notification channels, credential caching) |
+| Runtime git hygiene | `references/runtime-gitignore.md` (classify runtime vs core files) |
 | Memory | `hermes memory status` or [Memory docs](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory) |
 | Env variables | `hermes config env-path` or [Env vars reference](https://hermes-agent.nousresearch.com/docs/reference/environment-variables) |
 | CLI commands | `hermes --help` or [CLI reference](https://hermes-agent.nousresearch.com/docs/reference/cli-commands) |

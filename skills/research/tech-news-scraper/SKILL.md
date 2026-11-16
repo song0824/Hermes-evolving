@@ -101,7 +101,7 @@ for n in all_news:
 
 **Known RSS failures** (confirmed, remove from feed lists):
 - The Verge AI (`/ai-artificial-intelligence/rss/index.xml`): 404 Not Found; general Verge RSS: also 0 items
-- VentureBeat (`/feed/`): returns 429 (rate limited) consistently
+- VentureBeat (`/feed/`, `/category/ai/feed/`): returns 429 (rate limited) consistently (re-confirmed 2026-11-11)
 - Tom's Hardware (`/feeds/all` and `/feeds/tag/*`): return 0 items as of 2026-09-28 (all tag feeds stopped working; treat as fully broken)
 - EE Times tag/category feeds: use the main `/feed/` only (no sub-category RSS endpoints found)
 - IEEE Spectrum (`/robots/rss`): returns 0 items as of 2026-10-04
