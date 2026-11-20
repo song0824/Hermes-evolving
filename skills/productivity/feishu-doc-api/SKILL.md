@@ -574,6 +574,71 @@ The current app (`cli_a97b1e4633f99cb0`) has `bitable:app` and `docx:document` p
 - **⚠️ `tenant_access_token` can expire mid-operation**: Error 99991663 "Invalid access token for authorization" means the token expired. Re-fetch via `/auth/v3/tenant_access_token/internal` before continuing. Tokens have ~6600s TTL but can expire sooner if the app secret changed.
 - **Adding single member via `/members` (not batch_create)**: `POST /drive/v1/permissions/{DOC_ID}/members?type=docx` with body `{"member_type": "openid", "member_id": "ou_xxx", "perm": "full_access"}` works for adding one user. This is different from the `batch_create` endpoint and uses a different request body format (single object, not array).
 
+## Weekly Report TODO Extraction
+
+When asked to summarize a weekly report and extract TODOs/action items from a Feishu docx:
+
+### Document Structure Pattern (verified 2026-11-16)
+Weekly reports use a **flat structure** with:
+- `heading4` (type 5) blocks containing `@mention_user` as section headers
+- `heading1` (type 2) for section titles within each person's section (e.g., "1、完成记忆的分层")
+- `text` (type 12) for bullet-style content items
+- `bullet` (type 6) for occasional list items
+
+### Extraction Algorithm
+```python
+# Build block map first
+block_map = {b['block_id']: b for b in blocks}
+
+def extract_text(block):
+    for key in ['heading1','heading2','heading3','heading4','text','bullet','ordered','code','quote']:
+        if key in block:
+            elements = block[key].get('elements', [])
+            texts = []
+            for el in elements:
+                tr = el.get('text_run', {})
+                if tr:
+                    t = tr.get('content', '')
+                    if t: texts.append(t)
+                elif el.get('mention_user'):
+                    texts.append('@user')  # or resolve via contact API
+            return ''.join(texts)
+    return ''
+
+# Walk sequentially, track current section owner
+current_owner = None
+sections = {}  # owner -> list of {title, items}
+for b in blocks:
+    bt = b.get('block_type', 0)
+    text = extract_text(b).strip()
+    if not text:
+        continue
+    if bt == 5:  # heading4 = @user section header
+        current_owner = text
+        sections[current_owner] = []
+    elif bt == 2 and current_owner:  # heading1 = sub-task title
+        sections[current_owner].append({'title': text, 'items': []})
+    elif bt == 12 and current_owner:  # text = content item
+        if sections[current_owner]:
+            sections[current_owner][-1]['items'].append(text)
+        else:
+            sections[current_owner].append({'title': '', 'items': [text]})
+```
+
+### TODO Identification Heuristics
+After extracting all content, scan for:
+- **⏳ emoji** = in-progress / pending
+- **"-- 待跟进" / "-- 进行中" / "-- 待XX"** suffix = action items with owner
+- **"待决策" section** = explicit decision-needed items
+- **P0/P1 markers** = priority classification
+- **Unresolved blockers** = items with "待方案商", "待测试", "待确认"
+
+Present results grouped by product/project (圆圆机, 投影仪/INKO, 卢卡, 小方机, 算法, AI Native), sorted by P0 first. Include key risk items separately.
+
+### When raw_content vs blocks API
+- **blocks API**: Use when you need structured extraction (heading hierarchy, owner→content mapping, image tokens). This session confirmed it works well for weekly reports.
+- **raw_content API**: Use as fallback if blocks API returns empty text for mention sections, or for simple "who has content / who doesn't" checks.
+
 ## Structured Document Generation
 
 Since table blocks (type 18) cannot be reliably created via the docx write API (all cell formats fail with error 9499), use patterns in `references/structured-doc-patterns.md` for structured data layout.

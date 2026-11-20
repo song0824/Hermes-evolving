@@ -1,171 +1,145 @@
 #!/usr/bin/env python3
-"""
-GitHub AI Agent Skills Research Script — v2
-Fetches repo metadata, README previews, recent issues, and commit activity.
-Auto-populates Phase 2 targets from Phase 1 search results (top 15 by stars).
-Handles rate limit exhaustion gracefully.
-Usage: python3 github_research.py
+"""AI Agent Skills Research — consolidated Phase 1 + Phase 2 script.
 
-Outputs JSON to stdout with all research data.
+Run as a single invocation to avoid GitHub API rate limit exhaustion.
+Writes results to /tmp/ai_skills_results.json.
+
+Usage: python3 /tmp/ai_skills_research.py
 """
 
-import urllib.request as ureq, urllib.error as uerr, json, time, base64, sys, urllib.parse
+import json
+import urllib.request
+import urllib.parse
+import base64
+import sys
+import time
+from datetime import datetime, timedelta
 
-# Phase 1: Search queries (broad coverage of SKILL.md ecosystem)
+SEARCH_QUOTA = 10
+CORE_QUOTA = 60
+
+EXCLUDE = {
+    "langchain-ai/langchain", "langflow-ai/langflow", "dify-ai/dify",
+    "open-webui/open-webui", "comfyui", "crewai", "openclaw/moltbot",
+    "wasp-lang/open-saas", "farion1231/cc-switch", "danny-avila/LibreChat",
+    "dair-ai/Prompt-Engineering-Guide", "Shubhamsaboo/awesome-llm-apps",
+    "calesthio/OpenMontage", "googleworkspace/cli", "skalesapp/skales",
+    "veniceai/skills", "vercel-labs/skills", "multica-ai/andrej-karpathy-skills",
+    "Graphify-Labs/graphify", "hesreallyhim/awesome-claude-code",
+    "kepano/obsidian-skills", "datopian/portaljs",
+}
+
+KNOWN_BIG_REPOS = [
+    "anthropics/skills", "obra/superpowers", "JuliusBrussee/caveman",
+    "sickn33/agentic-awesome-skills", "OthmanAdi/planning-with-files",
+    "ruvnet/ruflo", "microsoft/SkillOpt",
+]
+
 SEARCH_QUERIES = [
     '"SKILL.md" agent sort:stars',
-    '"SKILL.md" AI agent sort:stars',
-    'pushed:>2026-04-01 SKILL.md agent sort:stars',
-    'pushed:>2026-04-01 "SKILL.md" sort:stars',
+    '"SKILL.md" sort:stars',
+    '"agent skills" framework sort:stars',
     '"SKILL.md" mcp sort:stars',
-    'agent skills marketplace sort:stars',
-    '"SKILL.md" claude sort:stars',
-    'agent skills codex sort:stars',
-    'awesome-copilot sort:stars',
 ]
-requests_used = 0
 
-def search_github(query, per_page=25):
-    """Search GitHub repos. Returns list of repo dicts."""
-    global requests_used
-    encoded = urllib.parse.quote(query)
-    url = f"https://api.github.com/search/repositories?q={encoded}&per_page={per_page}"
-    req = ureq.Request(url, headers={"Accept": "application/vnd.github.v3+json"})
-    resp = ureq.urlopen(req)
-    # Track rate limit
-    remaining = resp.headers.get("X-RateLimit-Remaining", "unknown")
-    requests_used += 1
-    print(f"  Rate limit remaining: {remaining} (total used: {requests_used})", file=sys.stderr)
-    data = json.loads(resp.read())
-    return data.get("items", []), data.get("total_count", 0)
+def api_get(url):
+    req = urllib.request.Request(url)
+    req.add_header("Accept", "application/vnd.github+json")
+    req.add_header("User-Agent", "AI-Skills-Research")
+    try:
+        resp = urllib.request.urlopen(url, timeout=15)
+        remaining = int(resp.headers.get("X-RateLimit-Remaining", "0"))
+        return json.loads(resp.read().decode()), remaining
+    except urllib.error.HTTPError as e:
+        remaining = int(e.headers.get("X-RateLimit-Remaining", "0"))
+        if e.code == 403:
+            print(f"  [403] remaining={remaining}", file=sys.stderr)
+            return None, remaining
+        elif e.code == 404:
+            return None, remaining
+        return None, remaining
+    except Exception as e:
+        print(f"  [ERR] {e}", file=sys.stderr)
+        return None, 0
 
-def fetch_readme(repo, max_chars=600):
-    """Fetch and decode README content."""
-    global requests_used
-    url = f"https://api.github.com/repos/{repo}/readme"
-    req = ureq.Request(url, headers={"Accept": "application/vnd.github.v3+json"})
-    resp = ureq.urlopen(req)
-    remaining = resp.headers.get("X-RateLimit-Remaining", "unknown")
-    requests_used += 1
-    data = json.loads(resp.read())
-    content = base64.b64decode(data["content"]).decode("utf-8", errors="replace")
-    return content[:max_chars]
+def github_search(query, page=1):
+    q = urllib.parse.quote(query)
+    url = f"https://api.github.com/search/repositories?q={q}&sort=stars&order=desc&per_page=30&page={page}"
+    data, remaining = api_get(url)
+    return data.get("items", []) if data else [], remaining
 
-def fetch_recent_issues(repo, count=5):
-    """Fetch recent open issues with labels."""
-    global requests_used
-    url = f"https://api.github.com/repos/{repo}/issues?state=open&sort=created&direction=desc&per_page={count}"
-    req = ureq.Request(url, headers={"Accept": "application/vnd.github.v3+json"})
-    resp = ureq.urlopen(req)
-    remaining = resp.headers.get("X-RateLimit-Remaining", "unknown")
-    requests_used += 1
-    issues = json.loads(resp.read())
-    return [{"title": i["title"], "labels": [l["name"] for l in i.get("labels", [])]} for i in issues[:count]]
+def get_repo_details(owner, repo):
+    url = f"https://api.github.com/repos/{owner}/{repo}"
+    data, remaining = api_get(url)
+    if not data:
+        return None, remaining
+    result = {
+        "full_name": data.get("full_name", ""),
+        "stars": data.get("stargazers_count", 0),
+        "forks": data.get("forks_count", 0),
+        "issues": data.get("open_issues_count", 0),
+        "description": data.get("description", ""),
+        "pushed_at": data.get("pushed_at", ""),
+        "language": data.get("language", ""),
+    }
+    commits_url = f"https://api.github.com/repos/{owner}/{repo}/stats/commit_activity"
+    commits_data, r2 = api_get(commits_url)
+    remaining = r2
+    if commits_data and isinstance(commits_data, list):
+        result["commits_4wk"] = sum(w.get("total", 0) for w in commits_data[-4:])
+    else:
+        result["commits_4wk"] = -1
+    return result, remaining
 
-def fetch_commit_activity(repo):
-    """Fetch 4-week commit total. Returns int or None."""
-    global requests_used
-    url = f"https://api.github.com/repos/{repo}/stats/commit_activity"
-    req = ureq.Request(url, headers={"Accept": "application/vnd.github.v3+json"})
-    resp = ureq.urlopen(req)
-    remaining = resp.headers.get("X-RateLimit-Remaining", "unknown")
-    requests_used += 1
-    data = json.loads(resp.read())
-    if isinstance(data, list) and len(data) > 0:
-        return sum(w["total"] for w in data[-4:])
-    return None
+# Phase 1
+all_repos = {}
+remaining = SEARCH_QUOTA
+for query in SEARCH_QUERIES:
+    if remaining < 2:
+        break
+    items, remaining = github_search(query)
+    for item in items:
+        fn = item["full_name"]
+        if fn not in EXCLUDE and fn not in all_repos:
+            all_repos[fn] = {"full_name": fn, "stars": item.get("stargazers_count", 0),
+                            "description": item.get("description", "")}
+    time.sleep(1)
 
-def research_repos(repos, sleep_seconds=7):
-    """Research a list of repos with rate limiting. Gracefully degrades on 403."""
-    results = []
-    rate_limited = False
-    for i, repo in enumerate(repos):
-        if rate_limited:
-            result = {"repo": repo, "readme_preview": "Rate limited — use browser_navigate fallback", "recent_issues": "Rate limited", "commits_4wk": None, "commit_status": "Rate limited"}
-            results.append(result)
-            continue
-        time.sleep(sleep_seconds)
-        print(f"Fetching {repo} ({i+1}/{len(repos)})", file=sys.stderr)
-        
-        result = {"repo": repo}
-        
-        try:
-            result["readme_preview"] = fetch_readme(repo)
-        except uerr.HTTPError as e:
-            if e.code == 403:
-                rate_limited = True
-            result["readme_preview"] = f"Error: {e}"
-        except Exception as e:
-            result["readme_preview"] = f"Error: {e}"
-        
-        try:
-            result["recent_issues"] = fetch_recent_issues(repo)
-        except uerr.HTTPError as e:
-            if e.code == 403:
-                rate_limited = True
-            result["recent_issues"] = f"Error: {e}"
-        except Exception as e:
-            result["recent_issues"] = f"Error: {e}"
-        
-        try:
-            commits = fetch_commit_activity(repo)
-            result["commits_4wk"] = commits
-            result["commit_status"] = "unknown" if commits is None else str(commits)
-        except uerr.HTTPError as e:
-            if e.code == 403:
-                rate_limited = True
-            result["commits_4wk"] = None
-            result["commit_status"] = f"Error: {e}"
-        except Exception as e:
-            result["commits_4wk"] = None
-            result["commit_status"] = f"Error: {e}"
-        
-        results.append(result)
-    
-    return results
+for fn in KNOWN_BIG_REPOS:
+    if fn in all_repos:
+        continue
+    owner, repo = fn.split("/")
+    url = f"https://api.github.com/repos/{owner}/{repo}"
+    data, remaining = api_get(url)
+    if data:
+        all_repos[fn] = {"full_name": fn, "stars": data.get("stargazers_count", 0),
+                        "description": data.get("description", "")}
+    time.sleep(1)
 
-if __name__ == "__main__":
-    # Phase 1: Search
-    print("=== PHASE 1: SEARCH ===", file=sys.stderr)
-    all_repos = {}
-    for q in SEARCH_QUERIES:
-        try:
-            items, total = search_github(q)
-            print(f"Query: {q} -> {total} results", file=sys.stderr)
-            for r in items:
-                fn = r["full_name"]
-                if fn not in all_repos or r["stargazers_count"] > all_repos[fn]["stars"]:
-                    all_repos[fn] = {
-                        "full_name": fn,
-                        "stars": r["stargazers_count"],
-                        "description": r.get("description", ""),
-                        "pushed_at": r.get("pushed_at", ""),
-                        "forks": r.get("forks_count", 0),
-                        "open_issues": r.get("open_issues_count", 0),
-                    }
-        except uerr.HTTPError as e:
-            if e.code == 403:
-                print(f"Query RATE-LIMITED: {q} (403). Remaining Phase 1 queries will also fail.", file=sys.stderr)
-                break  # Stop Phase 1 early — save quota for Phase 2
-            print(f"Query FAILED: {q} -> {e}", file=sys.stderr)
-    
-    # Auto-populate Phase 2: top 15 repos by stars
-    sorted_repos = sorted(all_repos.values(), key=lambda x: x["stars"], reverse=True)
-    DETAIL_REPOS = [r["full_name"] for r in sorted_repos[:15]]
-    
-    print(f"\nTop 15 repos by stars (auto-selected for Phase 2):", file=sys.stderr)
-    for r in sorted_repos[:15]:
-        print(f"  {r['full_name']}: {r['stars']} stars", file=sys.stderr)
-    
-    # Phase 2: Deep research on auto-selected repos
-    if DETAIL_REPOS:
-        print(f"\n=== PHASE 2: DEEP RESEARCH ({len(DETAIL_REPOS)} repos) ===", file=sys.stderr)
-        results = research_repos(DETAIL_REPOS)
-        
-        # Merge Phase 1 basic info into Phase 2 results
-        for r in results:
-            if r["repo"] in all_repos:
-                r["basic"] = all_repos[r["repo"]]
-        
-        print("\n=== JSON OUTPUT ===")
-        print(json.dumps(results, indent=2))
+# Phase 2
+sorted_repos = sorted(all_repos.values(), key=lambda x: x.get("stars", 0), reverse=True)
+detailed = []
+for repo_info in sorted_repos[:15]:
+    if remaining < 5:
+        repo_info["rate_limited"] = True
+        detailed.append(repo_info)
+        continue
+    fn = repo_info["full_name"]
+    owner, repo = fn.split("/")
+    details, remaining = get_repo_details(owner, repo)
+    if details:
+        repo_info.update(details)
+        detailed.append(repo_info)
+    else:
+        repo_info["rate_limited"] = True
+        detailed.append(repo_info)
+    time.sleep(1)
+
+# Output
+output = {"timestamp": datetime.now().isoformat(), "repos": detailed,
+          "all_found": [{"full_name": r["full_name"], "stars": r.get("stars", 0)} for r in sorted_repos[:20]]}
+with open("/tmp/ai_skills_results.json", "w") as f:
+    json.dump(output, f, indent=2, ensure_ascii=False)
+
+for i, r in enumerate(detailed[:10], 1):
+    print(f"{i}. {r['full_name']} — {r['stars']}★ | {r.get('description', '')[:80]}")

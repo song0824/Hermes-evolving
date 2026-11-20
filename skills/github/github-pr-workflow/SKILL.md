@@ -354,6 +354,52 @@ git push -u origin HEAD
 # 8. Merge when green (see Section 6)
 ```
 
+## Pre-Push Security Checklist
+
+### 🔴 Secret Scanning (GitHub blocks pushes with secrets)
+
+GitHub Secret Scanning **rejects pushes** (`GH013`) when it detects known-format secrets like Feishu `app_secret`, API keys, etc.
+
+**Before committing/pushing, always check for plaintext secrets:**
+
+```bash
+# Common secret patterns to check
+grep -rn "app_secret\|api_key\|access_token\|secret:" --include="*.yaml" --include="*.yml" --include="*.json" --include="*.py" . | grep -v '\${' | grep -v 'example' | grep -v 'xxx'
+```
+
+**Fix**: Replace with environment variable placeholders:
+- In `config.yaml`: `app_secret: ${FEISHU_APP_SECRET}`
+- In `.env`: `FEISHU_APP_SECRET=actual_value_here`
+- The `.env` file should be in `.gitignore`
+
+**Common patterns:**
+- `${ENV_VAR}` for YAML config placeholders
+- `os.getenv("ENV_VAR")` for Python code
+- Never commit `.env`, `auth.json`, credential files
+
+### 🔴 Runtime Artifact Cleanup
+
+Before committing, distinguish between:
+1. **Core code/config** — should be committed
+2. **Runtime artifacts** — `.gitignore` them, remove from tracking
+3. **Generated scripts** — evaluate case by case
+
+**Common runtime artifacts that should NOT be committed:**
+- `lsp/` — language server binaries
+- `auth.json` — OAuth credentials
+- `channel_directory.json` — dynamically generated
+- `*.log`, `*.pid`, `*.lock` — runtime state
+- `cache/`, `sessions/`, `logs/` — runtime directories
+- `screenshot-*.png` — temp images
+- `skills/.curator_state`, `skills/.usage.json` — internal state
+- `skills/*/scripts/` — skill runtime resources
+
+**Quick cleanup:**
+```bash
+git rm --cached <runtime_file>  # remove from tracking, keep on disk
+# Then add the pattern to .gitignore
+```
+
 ## Useful PR Commands Reference
 
 | Action | gh | git + curl |

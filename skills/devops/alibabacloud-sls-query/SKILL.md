@@ -299,42 +299,37 @@ for minute in active_minutes:
 
 This pattern was verified to successfully extract 461,377 exact TTS request records across 78 platforms.
 
-## ⚠️ Drill-down SQL `__time__` Filter Pitfall (🆕 2026-08-13)
+## ⚠️ Analytical SQL Returns Empty on Narrow Time Windows (Critical — Verified 2026-08-13, 2026-11-17)
 
-**When doing peak hour drill-downs with analytical SQL, do NOT include `__time__ >= X and __time__ < Y` in the SQL query string** — even when `GetHistograms` confirms data exists in that window.
+**SLS analytical SQL (`| SELECT ...`) may silently return empty results on narrow time windows (1-hour or less), even when data exists and `__time__` is NOT in the query string.** This is a broader SLS engine behavior than the original `__time__` filter pitfall alone.
 
-**Observed pattern** (08-13, multiple hours):
+**Observed pattern** (08-13):
 - `GetHistograms` for 20:00-21:00 CST → 13 errors confirmed
-- `GetLogs` with query `"level: ERROR and __time__ >= 1786622400 and __time__ < 1786626000 | SELECT ... GROUP BY logger"` → 0 results (empty list)
-- Same `GetLogs` **without** `__time__` filter in query, relying only on `from`/`to` params → correct results
+- `GetLogs` with query `"level: ERROR and __time__ >= X and __time__ < Y | SELECT ... GROUP BY logger"` → 0 results (empty list)
+- Same `GetLogs` **without** `__time__` filter in query → correct results
 
-**Root cause**: SLS analytical SQL with `__time__` range filter in the query clause may silently return empty on narrow time windows, even when data exists.
+**Extended observed pattern** (11-17):
+- Full-day analytical SQL (`from`=day_start, `to`=day_end) with `date_format(...) as hour GROUP BY hour` → confirmed 68 errors at 04:00, 46 at 02:00
+- Narrow window analytical SQL (`from`=04:00_ts, `to`=05:00_ts) with **identical query** `level: ERROR | SELECT count(1) as cnt, logger GROUP BY logger` → **0 results (empty list)**
+- Even a 2-hour window (02:00-04:00) returned empty
 
-**Fix**: For drill-down queries on narrow time windows (1-hour or less), **omit `__time__ >= X and __time__ < Y` from the SQL query string entirely**. Use the `from`/`to` API params for time filtering, and only include `level: ERROR | SELECT ... GROUP BY ...` in the query.
+**Root cause**: SLS analytical SQL engine has issues with narrow `from`/`to` API parameter windows (≤1 hour). The `__time__` filter in the query string makes it worse, but omitting it does NOT fully fix the issue.
 
-## Recommended Workflow: Histogram First, Then Drill Down
+**Reliable workflow for hourly drill-downs**:
+1. **Always run analytical SQL on the FULL day** with `date_format(from_unixtime(__time__ + 28800), '%H:00') as hour GROUP BY hour` to get per-hour breakdowns. This is the most reliable approach.
+2. **If you need per-logger breakdowns for a specific hour**, first use GetHistograms to confirm data exists, then:
+   - Try a 2-hour or 4-hour window instead of 1-hour (may work when 1-hour fails)
+   - Fall back to raw `GetLogs` (no SQL) with narrow `line: 10-20` and parse client-side
+3. **Never trust GetHistograms alone** on narrow windows — it uses sampling and can return all-zeros when data exists (11-17: 04:00 GetHistograms returned 0 in every 1-minute bucket, but full-day SQL confirmed 68 errors).
 
-1. **GetHistograms** — Call first to understand error distribution over time (**30-minute buckets**, not 60-second). This reveals error spikes, patterns, and helps identify peak periods to investigate.
-   - **Important**: SLS `GetHistograms` returns buckets in 30-minute intervals. To get hourly counts, aggregate consecutive buckets.
-   - **Do NOT pass `line` to GetHistograms** — it's not a valid parameter and will cause CLI errors.
-   ```json
-   {
-     "product": "sls",
-     "action": "GetHistograms",
-     "params": {
-       "project": "leap-online",
-       "logstore": "ling-server",
-       "query": "level: ERROR",
-       "from": "1777455121",
-       "to": "1777458721",
-       "region": "cn-shanghai"
-     },
-     "ak_id": "..."
-   }
-   ```
-   Returns: array of `{count, from, to, progress}` per time bucket. Use this to find peak error windows, then query those specific windows with `GetLogs`.
+## Recommended Workflow: Full-Day SQL First, Then Targeted Raw Logs
 
-2. **Targeted GetLogs** — Once you identify peak periods from histograms, query specific time windows with focused queries.
+1. **Full-day analytical SQL for distributions** — Run `GetLogs` with analytical SQL on the full day to get top loggers and top messages. This is the most reliable approach for logger/message classification.
+   - **Top loggers**: `level: ERROR | SELECT count(1) as cnt, logger GROUP BY logger ORDER BY cnt DESC LIMIT 20`
+   - **Top messages**: `level: ERROR | SELECT count(1) as cnt, substr(message, 1, 200) as msg_sample GROUP BY msg_sample ORDER BY cnt DESC LIMIT 10`
+   - **⚠️ Do NOT use `date_format(from_unixtime(__time__ + 28800), '%H:00')` for hourly distribution** — this produces wrong hour labels (verified 2026-11-19: showed "01:00" when spike was at "17:00"). Use GetHistograms instead (see below).
+2. **GetHistograms for hourly trend overview** — **Use as the authoritative source for hourly error distribution**. Sum 1-min or 10-min bucket counts into hourly totals client-side. Convert UTC bucket timestamps to CST by adding 8 hours.
+3. **Targeted raw GetLogs for samples** — If you need actual log entries for a specific hour, use raw `GetLogs` (no SQL) with `line: 10-20`. Avoid analytical SQL on narrow windows — it may return empty even when data exists (see pitfall above).
 
 ## ⚠️ CronJob / Kubernetes Job Logs NOT in Known Logstores (Critical — Verified 2026-10-29)
 
@@ -771,12 +766,14 @@ for keyword in ["下载图片失败", "封面生成失败", "视频转换失败"
 - **volcengineapi 火山引擎API调用异常（🆕 2026-08-09）**：`logger: app.controllers.volcengineapi`，首次出现6条。需关注是否为新增错误源或已知火山API问题的新表现形式。建议：检查火山引擎API调用是否有重试+退避策略，确认是否为限流或可用性下降。
 - **天气API 500错误（🆕 2026-07-08）**：`root` logger，3条「请求天气API失败，状态码: 500」。外部天气服务返回500，非本地问题。建议增加重试+降级策略。
 - **微信模板消息 require subscribe（🆕 2026-09-02）**：`root` logger，errcode 43004 `require subscribe`。用户未关注小程序/公众号时发送模板消息被拒。建议在发送前检查订阅状态，或对未订阅用户跳过发送。
+- **紧急联系人不存在（🆕 2026-11-19）**：`logger: app.controllers.emergency_contact`，错误消息：`联系人不存在或已失效: concat_id=-96489`。同时 `app.exception_handlers` 报 `2001001301: 联系人不存在或无权限: -96489`（9条）。新 logger，建议检查该 concat_id 数据是否被误删除。
 - **MySQL Duplicate Entry on users_app_un（🆕 2026-07-08）**：`root` logger，1条，`pymysql.err.IntegrityError (1062, "Duplicate entry 'wxeb54247cd511b31a-...' for key 'users_app_un'")`。微信登录并发注册导致唯一键冲突。建议：INSERT前检查或使用 `INSERT ... ON DUPLICATE KEY UPDATE`。
 - **Dify HTML 500错误（🆕 2026-07-06）**：Dify平台返回`<html><title>Internal Server Error</title>...</html>`而非JSON响应。影响`task_scheduler`和`root` logger（各4条）。与大规模signature_base中间件风暴（24,511条/天）时间重叠（15:00-17:00），Dify不可用是风暴可能根因。排查Dify平台可用性。
 - **amap_client 逆地理编码失败（🆕 2026-07-06）**：`logger: app.core.amap_client`，48条，`'NoneType' object has no attribute 'stream'`。高德地图API返回None导致。代码缺少None检查。
 - **获取手机号失败（🆕 2026-07-06）**：20条，`errcode=40029, errmsg=invalid code`（微信授权码无效），涉及`/weapp/api/usr/bind/phone/internal`。伴随`Unhandled Internal Server Error` 20条（级联）。
 - **audio_generator_scheduler 音频调度异常（🆕 2026-06-13）**：`logger: app.utils.audio_generator_scheduler`，首次出现21条，需确认是否为新错误源或已知问题的新表现形式。
 - **Coze 房间创建 500 错误（🆕 2026-06-16）**：`logger: app.controllers.coze`，错误消息：`创建Coze房间失败: HTTP请求失败: 500 - {"code":5000,"msg":"We're currently experiencing server issues."}`。Coze平台侧异常，非本地问题。建议增加重试+退避策略。
+- **Coze JWT `kid not been registred` 错误（🆕 2026-11-19 → 🔴 新增，260条/天）**：`logger: root` + `app.controllers.coze`，错误消息：`生成JWT token失败: msg: invalid jwt: kid not been registred`。**影响链路**：root层记录JWT失败(2条) → 创建房间失败(1条) → coze层记录任务失败(2条) → 共4-5条级联日志/次失败。**去重后约45-56个独立JWT失败事件/天**。集中在16:00-17:00 CST（260条/2h，占该时段92%）。**根因**：JWT签名使用的`kid`未在Coze平台注册，或JWT key已过期/轮换。**建议**：检查Coze平台JWT密钥配置；确认kid是否有效；验证近期是否有key轮换。**修复预期**：消除约260条Error（-53.6%全天）。
 - **`'NoneType' object has no attribute 'stream'`（🔴 持续未修复，已超5个月）**：影响 `/api/session/news/ip-dialog-info` 和 `/api/session/user/statistics` 两个接口。趋势：...→10-11:110条→10-14:85条→**10-20:88条（/ip-dialog-info 44条 + /user/statistics 44条，持续对称分布，仍为 #1 Logger 占37.9%）**。**根因**：下游服务返回None导致 `.stream` 属性访问失败，代码缺少 `if response is not None` 防护。**⚠️ 已跨越多个版本仍未修复，一行代码即可消除全天~38%的Error，最高优先级修复**。
 - **MQTT工作线程并发bug（🆕 2026-06-17~24）**：`logger: root`（或相关MQTT处理logger），错误消息：`MQTT工作线程异常: dictionary changed size during iteration`（28条/7d）。Python dict 遍历时被其他线程修改，需要加锁或改用 `list(d.items())` 快照遍历。
 - **MQTT连接/永久连接错误（🆕 2026-08-02）**：`logger: root`，错误消息：`MQTT connect failed` 和 `MQTT permanent connection error`。08-02各51条（合计102条），相比08-01的38条增长168%。建议检查MQTT Broker状态、设备端是否有重连风暴、增加指数退避重试。
@@ -840,13 +837,13 @@ For daily error reports (e.g., cron jobs comparing yesterday vs. previous day), 
 For daily error reports (e.g., cron jobs comparing yesterday vs. previous day):
 
 1. Calculate timestamps for yesterday and day-before using Python `datetime`.
-2. Run `GetHistograms` for both days to get hourly distribution (aggregate 30-min buckets).
-3. Run `GetLogs` with analytical queries for:
+2. Run `GetLogs` with **full-day analytical SQL queries** for top loggers and top messages:
    - Top error loggers: `level: ERROR | SELECT count(1) as cnt, logger GROUP BY logger ORDER BY cnt DESC LIMIT 20`
-   - Top error messages per critical logger
-   - Peak hour drill-down: `level: ERROR and __time__ >= X and __time__ < Y | ...`
-4. Convert all timestamps to CST (UTC+8) for reporting: `datetime.utcfromtimestamp(ts) + timedelta(hours=8)`.
-5. Compare day-over-day: total counts, hourly distribution, logger changes, new error types.
+   - Top error messages: `level: ERROR | SELECT count(1) as cnt, substr(message, 1, 200) as msg_sample GROUP BY msg_sample ORDER BY cnt DESC LIMIT 10`
+3. **Use GetHistograms for hourly distribution** (NOT analytical SQL with `+28800` — see pitfall above). Query with 1-min or 10-min buckets across the full day, then sum into hourly totals client-side. Convert UTC bucket `from` timestamps to CST by adding 8 hours.
+4. **Do NOT use analytical SQL on narrow time windows (≤1 hour) for drill-downs** — the SLS engine may silently return empty even when data exists. If you need per-logger breakdowns for a specific peak hour, use raw `GetLogs` with `line: 10-20` and parse client-side.
+5. Convert all timestamps to CST (UTC+8) for reporting: `datetime.utcfromtimestamp(ts) + timedelta(hours=8)`.
+6. Compare day-over-day: total counts, hourly distribution, logger changes, new error types.
 
 **Common findings pattern**:
 - Error spikes at specific hours often correlate with: Pod restarts/rolling updates, batch job triggers, TTS/audio generation failures for specific IPS records, downstream service (Dify) outages.

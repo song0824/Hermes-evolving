@@ -10,7 +10,7 @@ QPS (Queries Per Second) = **number of log entries in a single second** from an 
 ```
 
 - `__time__`: SLS log timestamp in UNIX seconds (UTC)
-- `+ 28800`: Convert to Beijing time (UTC+8)
+- `+ 28800`: Convert to Beijing time (UTC+8) — ⚠️ **See pitfall below**: this may produce WRONG hour labels in hourly GROUP BY queries. For hourly distribution, use GetHistograms instead.
 - `from_unixtime()`: Group by exact second
 - `ORDER BY cnt DESC LIMIT <N>`: Get top N peak seconds
 
@@ -68,6 +68,20 @@ Where 86400 = seconds in a day.
 **A keyword may appear in multiple log fields, causing false matches.** Example: `sensenova` appears in the `Authorization` header signature of ALL TTS requests (regardless of actual platform), so `GetHistograms` with query `tts and sensenova` returns 100% of traffic.
 
 **Rule**: When a keyword matches unexpectedly high volumes, check which field it appears in. Use `GetLogs` to inspect raw logs and identify the exact field containing the keyword. Prefer unique identifiers (e.g., `luka_child`, `tiancaitongsheng`) that only appear in the target field.
+
+## ⚠️ `+ 28800` Timezone Conversion Produces WRONG Hour Labels (Critical — Verified 2026-11-19)
+
+**Analytical SQL with `date_format(from_unixtime(__time__ + 28800), '%H:00') as hour GROUP BY hour` produces INCORRECT hour labels** for hourly error distribution. In verified testing (2026-11-19), the query returned "01:00: 252" for the main error spike, but GetHistograms confirmed the spike was actually at "17:00: 252" — a 16-hour offset error.
+
+**Root cause**: The SLS `from_unixtime()` function may interpret the shifted timestamp differently than expected, or the `+28800` arithmetic interacts unexpectedly with the SLS SQL engine.
+
+**Reliable alternative for hourly distribution**:
+1. Use `GetHistograms` with fine-grained buckets (1-min or 10-min) across the full day
+2. Sum bucket counts into hourly totals client-side
+3. The GetHistograms bucket timestamps are UTC; convert to CST by adding 8 hours to the bucket's `from` timestamp
+4. Verified: GetHistograms hourly totals match the true distribution (485 total yesterday, confirmed by both methods)
+
+**Rule**: For daily error reports, use GetHistograms for hourly distribution. Reserve analytical SQL for logger/message breakdowns (which don't require timezone conversion).
 
 ## Multi-day Comparison Script Pattern
 
